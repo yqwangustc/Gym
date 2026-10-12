@@ -1,0 +1,4 @@
+-e nemo-gym[dev] @ ../../
+rapidfuzz==3.14.6
+# Independent source-distance oracle for the resource tests.
+editdistance==0.8.1

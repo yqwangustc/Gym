@@ -1,0 +1,27 @@
+openasr:
+  resources_servers:
+    openasr:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      description: Synthetic text-only examples for OpenASR word error rate verification
+      subset: librispeech_test_clean
+      scoring_version: asr_v1
+      # The example dataset has five synthetic text rows; set this to the real split count.
+      expected_num_rows: 5
+      expected_sample_ids_file: null
+openasr_simple_agent:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      resources_server:
+        type: resources_servers
+        name: openasr
+      model_server:
+        type: responses_api_models
+        name: policy_model
+      datasets:
+      - name: example
+        type: example
+        jsonl_fpath: resources_servers/openasr/data/example.jsonl
+        license: Apache 2.0

@@ -1,0 +1,64 @@
+{
+  "source_repository": "VLMEvalKitMcore",
+  "source_root": "vlmeval/dataset/avlm",
+  "source_snapshot": "Captured English ASR normalization and scoring baseline",
+  "license": "Apache-2.0",
+  "files": [
+    {
+      "original_file": "asr_normalizer.py",
+      "sha256": "c0d64a739749a6e039a9dce78b6618e1e690d559b7be6c1d2bcd7e807a99cc75",
+      "vendored_file": "asr_normalizer.py",
+      "changes": [
+        "NVIDIA/VLMEvalKit SPDX notices",
+        "Ruff formatting only; no logic changes"
+      ],
+      "vendored_sha256": "51062bfd5b229830d05a03b429010f61892209f21cb9b2ae758227b5807eb198",
+      "ast_identical": true
+    },
+    {
+      "original_file": "english_abbreviations.py",
+      "sha256": "39c6b9a1c51d82a9308369ddf227c8d01e53f1956c595a792045c2b144bf3c3a",
+      "vendored_file": "english_abbreviations.py",
+      "changes": [
+        "NVIDIA/VLMEvalKit SPDX notices",
+        "Ruff formatting only; no logic changes"
+      ],
+      "vendored_sha256": "3fd01a98e4a510dba9b664c4598491f2771b41da257e45d87f0a86a8f4c1b5f3",
+      "ast_identical": true
+    },
+    {
+      "original_file": "utils.py",
+      "sha256": "d150b7ff06de76f0b5538e6fbf64d1f608cf384ef4800e0817df426258a6647b",
+      "vendored_file": "english_text_normalizer.py",
+      "definition": "EnglishTextNormalizer",
+      "original_lines": [
+        38,
+        123
+      ],
+      "changes": [
+        "Extracted original EnglishTextNormalizer class; unrelated functions/dependencies omitted",
+        "Relative imports retargeted to sibling vendored modules",
+        "NVIDIA/VLMEvalKit SPDX notices",
+        "Ruff formatting only; no logic changes"
+      ],
+      "vendored_sha256": "2fb3ba4a6a2eec2e0e39062d90da6ea15ca5c6d1ec5acc8dc51b497ccac4a5db",
+      "ast_identical": true
+    }
+  ],
+  "source_benchmark": "LibriSpeech_test_clean",
+  "source_scorer": "utils.py:210-249 asr_wer",
+  "dependency": {
+    "editdistance": "0.8.1",
+    "note": "Original editdistance dependency unversioned; replay editdistance0.8.1 produces exact original corpus metric and all row edits validated. Normalizer uses Python standard library only."
+  },
+  "normalizer_semantics": "Exact AST definition identity, independently replayed against all2620referencehypotheses",
+  "reference_replay": {
+    "rows": 2620,
+    "reference_words": 53027,
+    "edits": 795,
+    "wer_percent": 1.4992362381428328
+  },
+  "license_sha256": "5f0538b314b13e062d1fed3991ec1868cc71c49d0838cd7bc6ef563be06a5ad3",
+  "source_repository_description": "A VLMEvalKit-derived evaluator used to capture the baseline normalization behavior",
+  "upstream_normalizer_repository": "https://github.com/kurianbenoy/whisper_normalizer"
+}
