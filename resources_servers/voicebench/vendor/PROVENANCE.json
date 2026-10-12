@@ -1,0 +1,41 @@
+{
+  "source_repository": "Captured VoiceBench reference-evaluator implementation",
+  "source_commit": "746ae4474e06639be9ff8f1cb86a6e49bbaab758",
+  "license": "Apache-2.0",
+  "source_files": {
+    "voicebench/evaluator/mcq.py": {
+      "sha256": "ed3e6d54799f41cc97430a48502764e61e926771c0d3bc0519035814fbad6a94",
+      "vendored_as": "mcq.py"
+    },
+    "voicebench/evaluator/bbh.py": {
+      "sha256": "914b92d7680d99cc7ef93cda8e78bf37bbb8ee3874edb52dea447083e166bee0",
+      "vendored_as": "bbh.py"
+    },
+    "voicebench/evaluator/harm.py": {
+      "sha256": "1d5a7fdb39689af65a7c17d5c2368a85f6e54af3d19dafd03842fb7c82225266",
+      "vendored_as": "refusal.py"
+    },
+    "voicebench/evaluator/ifeval.py": {
+      "sha256": "d43f8c7e3273523c2a88de542179c5b137d08fb8c2b0b4085b32c48a51c70924",
+      "vendored_as": "ifeval.py"
+    },
+    "voicebench/evaluator/instruction_following_eval/instructions.py": {
+      "sha256": "ac8af03812e0b2e19431c0664812cdf27d37a702e84feda71273b5d4d99c7be0",
+      "vendored_as": "instruction_following_eval/instructions.py"
+    },
+    "voicebench/evaluator/instruction_following_eval/instructions_registry.py": {
+      "sha256": "8c8a9810e53b0755c405d0ec76f2f2bbcc965e42c41765772c070d04dc45176d",
+      "vendored_as": "instruction_following_eval/instructions_registry.py"
+    },
+    "voicebench/evaluator/instruction_following_eval/instructions_util.py": {
+      "sha256": "c15ce8f341cec041a687271885b223b49999b2e839962b8ee9ac2a898b87ba94",
+      "vendored_as": "instruction_following_eval/instructions_util.py"
+    }
+  },
+  "modifications": [
+    "Remove unused dataset aggregate methods and imports.",
+    "Replace global random calls with request-local ContextVar RNG.",
+    "Remove BBH fallback console prints; retain explicit wrapper diagnostics.",
+    "Ruff formatting; preserve original parser/check quirks."
+  ]
+}
