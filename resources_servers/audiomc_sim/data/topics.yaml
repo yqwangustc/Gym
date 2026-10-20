@@ -1,0 +1,631 @@
+# Expanded training taxonomy, inspired by resources/topics.yaml.
+# Original references:
+# - MultiChallenge, Appendix A.1: https://arxiv.org/html/2501.17399v2#A1
+# - Audio MultiChallenge, Appendix A.7: https://arxiv.org/html/2512.14865v1#A7
+# New seeds and explanations are authored for broader training coverage, not
+# claimed to be entries from either benchmark. Overlapping source seeds regrouped.
+# Structure: category -> evaluation axis -> topic -> subtopic -> explanation.
+# Domain overlap across axes is intentional only when the tested obligation differs.
+# Spoken, turn-based scenarios only; faithful TTS; no acoustic-only evidence,
+# visual formatting, code, live lookups, or actual bookings and other tool actions.
+# Inference memory: apply earlier user details implicitly, without a direct recall quiz.
+# Instruction retention: state the persistent rule explicitly in the first user turn.
+# Self-coherence: test the assistant's own established claims under unchanged facts;
+# allow corrections justified by new evidence and do not reward preserving errors.
+# Voice editing: the user explicitly revises a prior value, choice, version, or scope;
+# preserve unaffected details and distinguish replacement, addition, and rollback.
+# Use invented examples for identifiers and supplied facts for scenario-specific rules.
+# Keep spoken lists, number strings, casts, and alternative versions short enough to
+# follow aloud; identify edit targets and unchanged details in words. Clarify genuine
+# ambiguity rather than relying on intonation, a display, or an unstated intended edit.
+# A recurring edit operation in another domain should exercise that domain's distinct
+# roles, units, scope, or version relationships rather than only substitute nouns.
+
+category:
+  inference_memory:
+    food_and_diet:
+      ingredient_allergies: Exclude an ingredient mentioned as an allergy earlier when later proposing a shared meal.
+      eating_preferences: Use an earlier vegetarian or other eating preference when planning food for a different occasion.
+      flavor_dislikes: Avoid flavors the user previously disliked when suggesting an unfamiliar dish.
+      meal_timing: Fit a later meal plan around the eating schedule described earlier.
+      portion_needs: Account for the household appetite and leftover preferences established before discussing dinner.
+    cooking_resources:
+      available_appliances: Recommend a preparation method that works with the kitchen appliances the user already described.
+      pantry_ingredients: Build a later meal suggestion around ingredients previously mentioned as available.
+      cooking_skill: Tailor later recipe guidance to the user's earlier account of their cooking experience.
+      preparation_window: Select a meal that fits the preparation time the user said they have.
+      shared_kitchen_limits: Respect earlier restrictions on kitchen access when suggesting how to prepare a meal.
+    work_scheduling:
+      shift_pattern: Fit a later personal plan around the work shifts mentioned earlier.
+      protected_focus_time: Avoid proposing interruptions during a focus period previously described by the user.
+      colleague_availability: Suggest a discussion time compatible with a colleague's availability established earlier.
+      deadline_dependencies: Prioritize a later work request using an earlier explanation of which deadline depends on which task.
+      completed_work: Avoid recommending work the user already reported finishing when discussing next steps.
+    family_coordination:
+      pickup_responsibilities: Plan an afternoon activity around a previously mentioned school-pickup responsibility.
+      shared_vehicle: Account for who has the family car when suggesting how to get to a later activity.
+      caregiving_window: Fit a later outing around a caregiving period established in earlier conversation.
+      household_quiet_hours: Respect the household's earlier quiet-time arrangement when recommending evening activities.
+      family_participation: Choose an activity suitable for the family members the user previously said would join.
+    travel_planning:
+      selected_destination: Tailor a later packing or activity suggestion to the destination established earlier.
+      travel_pace: Match the pace of a later itinerary to the user's earlier preference for relaxed or busy travel.
+      transport_preferences: Use the user's earlier comfort with trains, driving, or flying when discussing a new trip segment.
+      accommodation_needs: Respect lodging requirements mentioned earlier when comparing hypothetical stays.
+      previous_trip_experience: Avoid repeating a travel disappointment described earlier when suggesting a new outing.
+    local_outings:
+      starting_location: Use the previously stated starting point when discussing how to organize an outing.
+      distance_limit: Keep later outing ideas within the travel-distance limit already shared.
+      indoor_preference: Account for an earlier preference for indoor activities when planning a free afternoon.
+      available_transport: Suggest an outing reachable with the transport options the user said were available.
+      crowd_tolerance: Tailor later event suggestions to an earlier discomfort with crowded settings.
+    personal_finances:
+      discretionary_budget: Keep later discretionary purchase ideas within a spending limit established earlier.
+      savings_priority: Weigh a later optional expense against the savings goal the user previously described.
+      irregular_income: Adapt a budgeting discussion to the income variability mentioned earlier.
+      recurring_expenses: Leave room for known recurring expenses when allocating a newly discussed amount.
+      shared_costs: Account for an earlier agreement about splitting expenses when discussing a group plan.
+    purchase_decisions:
+      existing_equipment: Avoid recommending a redundant purchase given equipment the user already owns.
+      past_product_problem: Address the specific problem reported with an earlier purchase when comparing replacements.
+      repair_preference: Consider the user's earlier preference for repair before suggesting replacement.
+      storage_space: Recommend an item that fits the storage space described earlier.
+      brand_experience: Use a previously shared brand experience when discussing a later purchase comparison.
+    home_living:
+      rental_restrictions: Respect earlier rental restrictions when suggesting a home improvement.
+      room_dimensions: Use an earlier verbally supplied doorway width when discussing whether a named piece of furniture would fit through it, without requiring a floor plan.
+      shared_space_use: Fit a later home arrangement around how housemates already use the space.
+      maintenance_history: Avoid repeating an attempted fix the user previously said did not work.
+      indoor_environment: Account for earlier descriptions of ventilation or sunlight when suggesting a household routine.
+    gardening:
+      sunlight_exposure: Choose a planting idea compatible with the sunlight the user described earlier.
+      watering_availability: Match a later garden-care suggestion to the watering availability already shared.
+      container_limits: Fit planting recommendations to the container size and space mentioned earlier.
+      preferred_harvest: Favor plants that support the user's earlier cooking or harvesting goals.
+      previous_plant_failures: Adjust a later gardening suggestion using the conditions behind a failure previously discussed.
+    pet_routines:
+      pet_species: Suggest everyday enrichment appropriate to the animal species mentioned earlier.
+      feeding_arrangement: Fit a later routine suggestion around the feeding arrangement already described.
+      exercise_tolerance: Account for an earlier description of a pet's usual activity tolerance when planning playtime.
+      separation_routine: Use earlier details about time away from home when discussing a pet-care schedule.
+      household_pet_conflicts: Respect a previously described interaction between pets when suggesting a shared routine.
+    exercise_planning:
+      fitness_goal: Tailor later general exercise ideas to the goal the user already established.
+      stated_mobility_limits: Keep a later activity suggestion within physical limitations explicitly shared earlier.
+      equipment_access: Use only the exercise equipment the user previously said they can access.
+      workout_duration: Fit a proposed session into the earlier stated time available for exercise.
+      recovery_day: Account for an earlier strenuous session when discussing the next day's activity.
+    learning_support:
+      exam_objective: Focus a later practice session on the examination goal mentioned earlier.
+      demonstrated_knowledge: Explain a later related idea using the knowledge level already demonstrated in conversation.
+      preferred_practice: Reuse a practice method the user previously said helped them learn.
+      persistent_confusion: Address the earlier source of confusion when explaining a new related example.
+      study_resources: Suggest a study approach that uses resources the learner already said they have.
+    career_development:
+      career_target: Tailor later interview practice to the role the user previously said they want.
+      transferable_experience: Connect a later career question to the experience the user described earlier.
+      relocation_constraints: Respect an earlier restriction on moving when comparing hypothetical job options.
+      work_arrangement: Account for the user's earlier preference for remote, hybrid, or on-site work.
+      application_stage: Suggest preparation appropriate to the application stage already established.
+    hobbies_and_making:
+      ongoing_project: Relate later creative suggestions to the hobby project introduced earlier.
+      skill_level: Match a new hobby challenge to the user's previously described experience.
+      available_materials: Suggest a project using materials the user already said they have.
+      session_length: Keep a hobby activity compatible with the free-time window mentioned earlier.
+      frustration_point: Avoid repeating a hobby obstacle the user previously identified without addressing it.
+    entertainment:
+      spoiler_boundary: Avoid revealing story events beyond the point the user earlier said they had reached.
+      content_preferences: Respect an earlier stated content preference when proposing something to watch.
+      listening_context: Match a later music suggestion to the listening setting previously described.
+      reading_habits: Suggest reading suited to the user's earlier description of attention span and reading routine.
+      group_tastes: Balance the tastes of participants named earlier when planning a shared entertainment choice.
+    gifts_and_celebrations:
+      recipient_interest: Use an earlier recipient interest when suggesting a later gift idea.
+      occasion_meaning: Tailor a celebration suggestion to the significance the user previously attached to the occasion.
+      delivery_constraints: Account for an earlier delivery or handoff constraint when planning a gift.
+      previous_gift: Avoid repeating a gift the user already said they gave.
+      surprise_secrecy: Avoid disclosing a celebration in a later draft to its recipient after the user earlier described the event as a surprise.
+    community_activities:
+      volunteer_commitment: Fit a new community activity around volunteering commitments already described.
+      available_skills: Suggest a contribution that uses skills the user previously offered.
+      neighborhood_access: Account for earlier transport or access limitations when proposing community participation.
+      community_priority: Connect a later project suggestion to the local need the user previously emphasized.
+      participation_comfort: Respect earlier preferences for public-facing or behind-the-scenes volunteering.
+    interpersonal_support:
+      earlier_conflict: Relate a later communication suggestion to the disagreement already described.
+      relationship_boundary: Respect an earlier boundary when advising how to respond to a new message.
+      preferred_support: Offer the kind of support the user previously said they find helpful.
+      current_stressor: Account for a stressor disclosed earlier when discussing a later everyday decision.
+      important_relationship: Preserve the relationship context already supplied when drafting a considerate reply.
+    communication_preferences:
+      preferred_name: Use the nickname the user earlier mentioned going by when drafting a later informal introduction for them.
+      hands_free_context: Make a later explanation usable by listening alone after the user earlier mentioned having their hands occupied while cooking.
+      language_comfort: Use the language comfort described earlier when proposing a communication approach.
+      directness_preference: Tailor a later sensitive message to the user's earlier preference for direct or gentle wording.
+      unfamiliar_terms: Avoid relying on terminology the user previously said they do not understand.
+    event_attendance:
+      arrival_window: Plan a later event activity around the arrival time the user previously mentioned.
+      companion_needs: Account for a companion's earlier stated needs when discussing seating or participation.
+      ticket_arrangement: Avoid suggesting a conflicting attendance plan given ticket arrangements already described.
+      dress_constraint: Fit an outfit discussion to a dress requirement shared earlier.
+      exit_deadline: Respect an earlier need to leave by a particular time when planning event participation.
+    transport_and_commuting:
+      commute_duration: Fit a later morning routine around the commuting duration already described.
+      transfer_aversion: Account for an earlier dislike of changing vehicles when comparing hypothetical routes.
+      parking_arrangement: Use the user's earlier parking constraints when discussing a driving plan.
+      luggage_load: Tailor a later transport suggestion to the luggage or equipment previously mentioned.
+      transfer_time: Allow extra transfer time after the user earlier described needing to manage a stroller during the journey.
+    digital_habits:
+      device_access: Suggest a way to listen to a saved recording using devices the user earlier said they own, without assuming an extra device.
+      notification_preferences: Respect earlier preferences about notifications when discussing an organization routine.
+      offline_need: Suggest an organization routine that works offline after the user earlier mentioned having no connectivity during their commute.
+      shared_device: Account for an earlier description of a shared device when advising on personal organization.
+      familiarity_level: Explain a later everyday technology concept at the technical comfort level already established in conversation.
+    daily_routines:
+      sleep_schedule: Fit later routine advice around the sleep schedule previously described.
+      energy_pattern: Suggest timing for a demanding task using the user's earlier account of when they feel alert.
+      household_sequence: Account for the existing order of household responsibilities when discussing a new routine.
+      meal_prep_habit: Connect a later food-planning suggestion to the preparation habits described earlier.
+      recurring_errand: Combine a later errand with a regular trip the user previously mentioned.
+    packing_and_preparation:
+      bag_capacity: Keep a later packing suggestion within the luggage capacity already stated.
+      borrowed_items: Avoid asking the user to buy an item they earlier arranged to borrow.
+      trip_duration: Adjust a later preparation list to the length of the outing established earlier.
+      destination_facilities: Use earlier information about available facilities when suggesting what to bring.
+      forgotten_item_history: Prioritize a preparation check based on something the user previously said they often forget.
+
+  instruction_retention:
+    response_length:
+      sentence_limit: Keep each answer within the sentence limit explicitly requested at the start.
+      one_recommendation: Offer only one recommendation per turn as requested, despite later opportunities to list many.
+      brief_followups: Honor a standing request for brief follow-up answers unless the user explicitly asks for detail.
+      no_unrequested_background: Skip historical background unless asked, following a first-turn request to focus explanations on how things work now.
+      short_examples: Keep illustrative examples within the length requested for the entire conversation.
+    answer_organization:
+      answer_before_explanation: Give the direct answer before explaining whenever the user's initial standing instruction applies.
+      spoken_steps: Present procedures as clearly separated spoken steps throughout the conversation.
+      pros_then_cons: Preserve the requested order of advantages followed by disadvantages in every comparison.
+      conclusion_last: End each substantive explanation with a short takeaway under the user's standing instruction.
+      one_question_at_a_time: Ask only one clarification question per turn as explicitly requested at the beginning.
+    language_choice:
+      chosen_language: Continue answering in the user's explicitly selected language across later topic changes.
+      keep_names_untranslated: Preserve names and product labels in their original language under a persistent translation preference.
+      translate_quoted_phrases: Translate quoted foreign phrases into the chosen response language whenever the standing instruction applies.
+      bilingual_explanations: Give the requested two-language explanations in the same order on every applicable turn.
+      translation_before_commentary: Give the requested translation before discussing wording choices, following the user's explicit first-turn translation workflow.
+    terminology:
+      plain_language: Continue avoiding unexplained specialist language after the user requests plain explanations throughout.
+      expand_new_abbreviations: Expand each newly introduced abbreviation under an explicit conversation-wide instruction.
+      domain_terms: Use the requested professional vocabulary consistently when discussing the same specialist field.
+      familiar_unit_system: Express measurements in the unit system the user explicitly requests for all answers.
+      avoid_disliked_expression: Avoid a specified conversational phrase even when a later prompt would commonly elicit it.
+    evidence_and_uncertainty:
+      label_assumptions: Identify assumptions explicitly whenever the standing instruction requires making them visible.
+      separate_fact_and_opinion: Keep factual statements distinct from subjective assessments under a conversation-wide request.
+      explain_estimates: State the basis of approximate quantities whenever the user has requested this consistently.
+      admit_unknowns: Preserve a standing instruction to say when information is unavailable instead of filling gaps.
+      counterexample_check: Include a meaningful limitation or counterexample in explanations when explicitly requested throughout.
+    clarification_protocol:
+      confirm_names: Confirm an ambiguous name before using it under the user's standing identification rule.
+      confirm_dates: Ask which date is intended when the user's established clarification rule encounters an ambiguous date.
+      ask_before_personalizing: Obtain the requested preference information before personalizing later recommendations.
+      distinguish_hypotheticals: Ask whether a scenario is hypothetical before giving personalized guidance when the standing rule requires it.
+      restate_complex_requests: Restate a multi-part request for confirmation before answering under the initial conversation-wide protocol.
+    recommendation_protocol:
+      alternatives_required: Offer a practical second choice alongside each main recommendation under an explicit first-turn instruction.
+      explain_selection: Include a brief reason for choosing an option on every recommendation turn.
+      avoid_unrequested_brands: Keep recommendations unbranded unless the user explicitly asks for brands, following the initial rule.
+      include_tradeoff: Mention a relevant drawback rather than presenting each recommendation as unconditionally best.
+      reversible_first: Prefer a reversible first step in advice throughout the conversation as explicitly requested.
+    budgeting_preferences:
+      cost_breakdown: Separate one-time and recurring costs whenever the user requests an estimate under the initial rule.
+      no_borrowing_suggestions: Honor an explicit conversation-wide instruction not to suggest borrowing for discretionary purchases.
+      budget_check_first: Ask for the available budget before comparing cost-sensitive options under the standing protocol.
+      include_low_cost_option: Include an inexpensive option whenever discussing choices after an explicit persistent request.
+      total_before_details: State a hypothetical total before its components under the user's initial budgeting-format instruction.
+    travel_guidance_preferences:
+      transit_first: Discuss public-transport options before driving options under an explicit standing instruction.
+      no_early_departures: Keep hypothetical itineraries free of early departures throughout the conversation as requested.
+      accessibility_check: Ask about access requirements before proposing travel plans under the initial protocol.
+      buffer_time: Include a stated buffer between itinerary activities whenever the standing instruction applies.
+      quiet_alternative: Offer a quieter alternative to busy attractions under the user's conversation-wide request.
+    meal_planning_protocol:
+      ingredients_before_method: Present ingredients before preparation steps whenever discussing a recipe under the initial rule.
+      servings_required: State the number of servings for every meal plan as explicitly requested throughout.
+      substitutions_required: Include a feasible substitution whenever introducing a key ingredient under the standing instruction.
+      no_alcohol: Avoid alcoholic ingredients and pairings throughout the conversation under an explicit initial restriction.
+      confirm_shared_diet: Confirm dietary requirements before suggesting food for new guests under the user's standing protocol.
+    tutoring_method:
+      hints_before_solutions: Give a hint before revealing a solution under an explicitly requested tutoring rule.
+      comprehension_check: Ask a brief understanding question after each new concept as requested at the start.
+      concrete_before_abstract: Begin explanations with a concrete example before introducing the abstract principle.
+      no_answer_spoilers: Withhold the final answer until the learner explicitly requests it under the initial tutoring agreement.
+      learner_attempt_first: Ask the learner to try before giving a worked solution under the standing practice rule.
+    language_practice:
+      correction_after_reply: Respond to meaning first and give language corrections afterward throughout the practice session.
+      explain_one_error: Correct only one language issue at a time under the learner's initial request.
+      recycle_learned_vocabulary: Reuse vocabulary already practiced before introducing new words, as explicitly requested in the first turn of the language lesson.
+      natural_rephrasing: Offer a natural spoken rephrasing after each learner response as requested for the session.
+      no_unrequested_translation: Avoid translating practice sentences until explicitly asked, following the initial learning rule.
+    interview_practice:
+      interviewer_role: Continue asking the interview questions rather than supplying the candidate's answers, as explicitly requested in the first turn.
+      feedback_after_answer: Wait for the candidate's answer before offering feedback under the agreed interview format.
+      behavioral_questions: Keep interview questions focused on past behavior when that is the requested session format.
+      followup_before_next_topic: Ask one relevant follow-up before moving to a new question under the initial practice rule.
+      score_with_reason: Accompany each requested practice score with a short justification throughout the session.
+    coaching_style:
+      actionable_next_step: End coaching responses with one achievable next step under a standing instruction.
+      no_shaming: Maintain the requested nonjudgmental coaching style when the user describes setbacks.
+      effort_specific_feedback: Give feedback about concrete effort rather than generic praise as requested for the conversation.
+      user_sets_goals: Ask the user to choose the next goal instead of imposing one under the initial coaching agreement.
+      progress_before_advice: Acknowledge a reported improvement before giving the next suggestion under the standing rule.
+    discussion_and_debate:
+      opposing_view_first: Present the strongest relevant opposing view before the main argument as requested throughout.
+      no_personal_attacks: Critique ideas without criticizing people under the initial debate agreement.
+      name_the_agreement: Mention a relevant point of agreement before addressing a disagreement, under the user's first-turn discussion instruction.
+      define_disputed_terms: Clarify ambiguous terms before arguing over them under the user's standing protocol.
+      remain_neutral: Avoid endorsing a side when the user has requested a neutral explanation throughout.
+    roleplay_boundaries:
+      fictional_guide: Maintain the fictional guide persona explicitly requested in the first turn while conducting a spoken imaginative tour.
+      historical_framing: Keep a historical roleplay explicitly framed as an imagined portrayal rather than authentic testimony.
+      turn_based_story_game: Wait for the user's chosen action before advancing an interactive story under the initial game rule.
+      no_user_dialogue: Avoid speaking the user's character's lines under a standing collaborative-roleplay instruction.
+      stay_within_setting: Keep references inside the fictional setting throughout, as explicitly requested in the first turn, unless the user asks for an out-of-character explanation.
+    dictation_preferences:
+      preserve_informal_voice: Keep dictated messages conversational rather than formalizing them under an initial editing preference.
+      no_added_commitments: Avoid adding promises to dictated messages unless the user explicitly supplies them.
+      readback_before_finalizing: Read back a short draft for confirmation before treating it as final under the standing workflow.
+      retain_supplied_names: Keep the user's supplied names in drafted messages instead of substituting generic labels.
+      no_extra_greeting: Omit greetings from short dictated replies under an explicit conversation-wide instruction.
+    privacy_in_drafts:
+      omit_home_address: Keep the user's supplied home address out of all drafted messages under the initial privacy rule.
+      use_first_names_only: Use only first names in hypothetical announcements as explicitly requested at the start.
+      exclude_personal_schedule: Avoid including the user's personal schedule in public-facing drafts under a standing restriction.
+      anonymize_third_parties: Replace third-party identifying details in drafted examples under the initial instruction.
+      permission_before_quoting: Ask before quoting a private message in a new draft under the user's standing permission rule.
+    spoken_accessibility:
+      avoid_visual_references: Explain verbally without relying on phrases pointing to a screen, as requested for the conversation.
+      explain_spatial_relations: Describe positions with explicit verbal landmarks under the user's standing accessibility preference.
+      manageable_chunks: Break lengthy explanations into short chunks and wait when the user's initial instruction requires it.
+      pronounceable_identifiers: Spell out ambiguous characters in fictitious identifiers under an explicit spoken-readback rule.
+      repeat_key_number: Repeat the key quantity once in full words when giving estimates under the standing clarity instruction.
+    planning_workflow:
+      confirm_scope_first: Establish the scope before creating a plan whenever the initial workflow requires it.
+      prioritize_before_schedule: Rank tasks before assigning times under the user's conversation-wide planning instruction.
+      ask_for_dependencies: Ask about relevant dependencies before sequencing unfamiliar tasks as explicitly requested.
+      contingency_required: Explain what to do if the main plan becomes unavailable, under the user's explicit first-turn request for a contingency.
+      separate_decision_from_action: Distinguish discussed decisions from completed external actions in every planning response.
+    conditional_response_rules:
+      estimate_triggers_range: Give a range instead of a single number whenever the user asks for an estimate under the initial rule.
+      choice_triggers_comparison: Compare both options before recommending one whenever the user presents a choice.
+      unfamiliar_topic_triggers_definition: Start with a definition when entering a new subject under the user's standing protocol.
+      urgent_request_triggers_briefness: Switch to a shorter response when the agreed urgency cue appears.
+      recap_on_request_only: Provide a full recap only after an explicit recap request under the initial conversation rule.
+    comparison_preferences:
+      same_dimensions: Compare alternatives using the same user-specified dimensions throughout the conversation.
+      no_rank_without_criteria: Ask what matters before ranking options under the user's persistent comparison rule.
+      practical_before_premium: Discuss everyday functional differences before premium features as initially requested.
+      state_common_ground: Explain what alternatives share before describing differences under a standing instruction.
+      avoid_false_certainty: Avoid presenting a subjective comparison as a universal ranking under the initial rule.
+    creative_collaboration:
+      preserve_user_authorship: Suggest changes without replacing the user's whole idea under an initial collaboration agreement.
+      ask_before_new_characters: Obtain agreement before introducing characters into a jointly developed story.
+      spoken_audience: Keep creative suggestions suited to being performed aloud under the user's standing instruction.
+      build_before_branching: Develop the user's selected idea before suggesting a different direction, under an explicit first-turn brainstorming agreement.
+      child_friendly_language: Maintain the requested age-appropriate wording when brainstorming stories for children.
+    supportive_conversation:
+      listen_before_suggestions: Reflect the user's concern before suggesting action under the initial support preference.
+      no_unrequested_advice: Offer advice only after the user asks for it under an explicit conversation-wide agreement.
+      avoid_generic_reassurance: Respond with specific acknowledgment rather than stock reassurance as requested at the start.
+      ask_kind_of_help: Ask whether the user wants listening or problem solving when the standing rule's condition applies.
+      acknowledge_uncertainty_about_others: Avoid asserting another person's motives when discussing relationships under the initial instruction.
+    technology_guidance:
+      one_concept_then_wait: Explain one everyday technology concept at a time and wait for the user's question before introducing the next, as requested in the first turn.
+      explain_before_change: Explain what a proposed setting change would do before recommending it throughout the conversation.
+      no_destructive_steps: Avoid recommending irreversible changes during troubleshooting under the user's initial restriction.
+      analogy_before_terminology: Introduce a familiar everyday analogy before naming a technical concept, under the user's first-turn technology-learning preference.
+      distinguish_private_and_shared: Say whether an example concerns a private or shared account before discussing access, as explicitly requested in the first turn.
+
+  self_coherence:
+    arithmetic_and_counts:
+      partition_totals: Keep the assistant's stated total compatible with its own earlier breakdown into groups.
+      per_person_share: Preserve a previously calculated per-person share when the total and number of people are unchanged.
+      percentage_baseline: Use the same baseline when revisiting a percentage the assistant calculated earlier.
+      unit_price: Keep an earlier unit-price comparison consistent when package sizes and prices have not changed.
+      inclusive_counting: Preserve the assistant's stated counting convention when explaining a short sequence again.
+    time_reasoning:
+      elapsed_time: Keep an earlier elapsed-time calculation consistent when the stated start and finish remain unchanged.
+      sequence_duration: Preserve the relationship between a total duration and the assistant's own estimated stage lengths.
+      timezone_example: Keep the same supplied time offset when revisiting a hypothetical scheduling example.
+      calendar_interval: Avoid changing an interval the assistant calculated between the same two dates.
+      simultaneous_tasks: Preserve whether earlier task-duration reasoning assumed parallel or sequential work.
+    measurements_and_units:
+      conversion_factor: Reuse the same correct conversion factor when discussing an earlier measurement.
+      scale_comparison: Keep relative size claims consistent with dimensions the assistant itself previously used.
+      capacity_estimate: Avoid revising a container-capacity estimate without changing the stated measurements or assumptions.
+      rounding_precision: Explain rather than silently contradict the precision of an earlier rounded quantity.
+      rate_and_amount: Keep a total amount compatible with the rate and duration the assistant previously stated.
+    definitions_and_categories:
+      category_membership: Avoid classifying the same example incompatibly under the assistant's earlier definition.
+      term_meaning: Preserve the meaning assigned to a term when using it in a later explanation.
+      necessary_condition: Keep a condition previously called necessary when evaluating another example of the same concept.
+      sufficient_condition: Avoid treating an earlier sufficient condition as mandatory without explaining a distinction.
+      general_and_specific: Preserve the assistant's earlier distinction between a broad category and a narrower instance.
+    causal_explanations:
+      cause_direction: Keep the direction of a previously explained cause-and-effect relationship unchanged without new evidence.
+      mechanism_steps: Avoid contradicting an intermediate step of the assistant's own earlier causal explanation.
+      multiple_causes: Preserve the role of additional causes the assistant previously acknowledged when simplifying its explanation.
+      confounding_factor: Do not claim causation from an example the assistant earlier explained as potentially confounded.
+      counterfactual_reasoning: Keep a later hypothetical consequence compatible with the mechanism previously described.
+    everyday_science:
+      material_properties: Avoid contradicting an earlier correct explanation of a material under unchanged conditions.
+      temperature_conditions: Preserve the environmental assumptions attached to a temperature-related fact previously explained.
+      energy_changes: Keep an everyday explanation of energy transfer consistent across follow-up examples.
+      biological_function: Avoid changing an earlier correct description of a biological function without justification.
+      weather_mechanism: Preserve an earlier conceptual weather explanation without inventing a live weather observation.
+    historical_accounts:
+      event_chronology: Keep the sequence of events in the assistant's historical account consistent during follow-up discussion.
+      date_reference: Avoid silently changing the date of the same event after stating it correctly earlier.
+      participant_roles: Preserve the roles assigned to historical participants in an earlier correct explanation.
+      source_uncertainty: Retain the qualification attached to an uncertain historical claim rather than later presenting it as settled.
+      historical_vs_fictional: Keep a previously identified fictional embellishment separate from the factual historical account.
+    places_and_routes:
+      relative_locations: Keep the relative positions described in a hypothetical map consistent when explaining a route verbally.
+      route_sequence: Preserve the assistant's earlier sequence of landmarks when discussing the same suggested route.
+      distance_claim: Avoid contradicting a distance the assistant established under the same scenario assumptions.
+      region_membership: Keep an earlier correct distinction between a city, region, and country in later explanations.
+      direction_reversal: Describe a return route consistently with the outward route the assistant previously gave.
+    procedural_guidance:
+      prerequisite_steps: Preserve dependencies the assistant itself identified when discussing whether a step can be skipped.
+      optional_steps: Avoid later treating a previously optional step as mandatory without an explanation.
+      stopping_condition: Keep the completion condition of an earlier procedure unchanged when discussing whether to continue.
+      precaution_rationale: Preserve the reason for an earlier relevant precaution when explaining a shortcut.
+      alternative_method: Do not claim that only one method exists after previously presenting another valid method.
+    technology_explanations:
+      local_vs_remote: Keep the earlier distinction between local storage and remote services consistent in follow-up guidance.
+      permission_meaning: Avoid contradicting the assistant's prior explanation of what a hypothetical permission allows.
+      troubleshooting_hypothesis: Keep a troubleshooting conclusion compatible with the evidence the assistant previously cited.
+      backup_vs_sync: Preserve the conceptual difference between backup and synchronization established earlier.
+      feature_limit: Avoid later claiming a feature does something the assistant already correctly explained it cannot do.
+    cooking_explanations:
+      method_rationale: Keep a preparation recommendation compatible with the cooking mechanism the assistant previously explained.
+      scaling_logic: Preserve the assistant's earlier recipe-scaling assumptions when discussing a new serving total.
+      substitution_tradeoff: Retain an earlier stated texture or flavor tradeoff when discussing the same substitution again.
+      order_of_operations: Avoid contradicting a necessary cooking sequence the assistant previously justified.
+      ingredient_function: Preserve the earlier explanation of an ingredient's function when considering whether to omit it.
+    product_comparisons:
+      ranking_criteria: Avoid reversing a recommendation when the assistant's stated ranking criteria and option facts are unchanged.
+      feature_attribution: Keep supplied hypothetical product features assigned to the same alternatives across the comparison.
+      identified_drawback: Do not describe an option as drawback-free after previously identifying a still-relevant drawback.
+      compatibility_claim: Preserve a compatibility conclusion under the same supplied device and accessory facts.
+      time_horizon: Preserve the distinction the assistant made between an option's short-term convenience and its long-term upkeep when revisiting the comparison.
+    financial_estimates:
+      fixed_vs_variable: Preserve which hypothetical expenses the assistant classified as fixed or variable.
+      recurring_vs_one_time: Avoid counting a one-time expense as recurring after explaining the distinction earlier.
+      included_costs: Keep an estimate's scope consistent with the items the assistant said it included.
+      savings_projection: Preserve the assumptions behind a simple hypothetical savings projection when discussing its result.
+      affordability_reasoning: Avoid calling the same hypothetical plan both affordable and unaffordable under unchanged stated criteria.
+    learning_strategies:
+      practice_rationale: Keep later study advice compatible with the learning rationale the assistant previously gave.
+      skill_prerequisites: Preserve prerequisites in the assistant's own explanation of how two skills build on each other.
+      feedback_interpretation: Avoid contradicting the strengths and weaknesses identified in an earlier practice answer.
+      mastery_standard: Keep a suggested mastery check aligned with the standard the assistant previously explained.
+      revision_vs_relearning: Preserve the assistant's distinction between reviewing familiar material and learning new material.
+    project_reasoning:
+      critical_dependency: Keep the assistant's project reasoning compatible with a dependency it previously identified.
+      effort_assumptions: Avoid changing an effort estimate without acknowledging a change in scope or resources.
+      resource_bottleneck: Preserve a previously identified resource bottleneck when proposing how to accelerate a plan.
+      success_definition: Keep an assistant-proposed measure of project success stable while discussing the same objective.
+      risk_priority: Explain rather than silently reverse the priority assigned to a project risk under unchanged assumptions.
+    argumentation:
+      premise_consistency: Avoid adopting a premise incompatible with one the assistant relied on earlier in the same argument.
+      conclusion_consistency: Keep conclusions compatible with the reasoning previously offered unless revising that reasoning explicitly.
+      exception_scope: Preserve the scope of an exception the assistant previously used to qualify a general claim.
+      objection_response: Keep a later answer compatible with the assistant's earlier response to an objection, or explain the reasoning that now changes its position.
+      evidence_weight: Apply a consistent evidential standard when comparing two examples in the same discussion.
+    uncertainty_and_bounds:
+      confidence_level: Preserve an earlier uncertainty qualification when no new evidence has been introduced.
+      estimate_range: Keep a later point estimate within an earlier stated range or explain why the range changed.
+      unknown_information: Avoid later asserting a scenario detail the assistant previously said was unknown unless new information or a clearly stated inference supports it.
+      assumption_dependence: Preserve the distinction between a hypothetical conclusion and a known fact established earlier.
+      approximate_vs_exact: Avoid presenting an earlier rough estimate as an exact measurement without justification.
+    ethical_reasoning:
+      comparable_cases: Apply an earlier stated ethical principle consistently to a comparable hypothetical case.
+      consent_principle: Avoid later endorsing conduct that conflicts with the assistant's own earlier explanation of consent.
+      privacy_tradeoff: Preserve the privacy tradeoff the assistant previously identified when discussing a related choice.
+      role_responsibility: Keep a hypothetical person's responsibilities consistent with the principle explained earlier.
+      stated_value_priority: Explain rather than silently reverse how competing values were prioritized in the same scenario.
+    recommendation_conditions:
+      conditional_advice: Preserve the condition attached to the assistant's earlier advice when discussing whether it applies.
+      changed_context: Acknowledge which new fact justifies changing an earlier recommendation rather than inventing a contradiction.
+      fallback_scope: Keep a previously proposed fallback distinct from the preferred plan when summarizing the recommendation.
+      exclusion_reason: Avoid recommending an option the assistant ruled out for a reason that remains applicable.
+      goal_alignment: Keep later suggestions aligned with the objective the assistant itself used to justify its recommendation.
+    fictional_characters:
+      identity_details: Preserve a fictional character's established name and identity across the assistant's narration.
+      relationships: Keep relationships introduced by the assistant consistent in later story scenes.
+      abilities_and_limits: Avoid giving a character an ability previously ruled out without a story explanation.
+      knowledge_state: Do not have a character act on information the assistant's story says they have not learned.
+      motivation: Keep a character's actions compatible with an established motivation or explain the change narratively.
+    fictional_worlds:
+      world_rules: Preserve the fictional world's established rules unless the story explicitly changes them.
+      location_layout: Keep the assistant's imagined setting spatially consistent when describing movement between places.
+      resource_limits: Respect a fictional resource limit established earlier when narrating later events.
+      time_system: Use the same simple fictional time rule the assistant introduced, such as a gate opening every third day, when continuing the story.
+      social_customs: Avoid contradicting an established fictional custom without introducing a relevant exception.
+    story_events:
+      event_order: Keep the order of events in the assistant's story consistent when retelling or extending it.
+      object_continuity: Preserve where an important story object was left when narrating a later scene.
+      unresolved_problem: Avoid treating an earlier unresolved plot problem as solved without a narrated resolution.
+      narrative_perspective: Keep track of what the established narrator can know when continuing a story.
+      ending_explanation: Explain a story ending using events the assistant actually established rather than inventing a conflicting past.
+    roleplay_identity:
+      occupation_knowledge: Keep an imagined role's claimed expertise consistent across the same roleplay.
+      character_preferences: Preserve preferences the assistant's character already expressed unless the roleplay explains a change.
+      fictional_biography: Avoid changing biographical details the assistant introduced for its own fictional persona.
+      scene_relationship: Keep the assistant character's relationship to the user's character consistent within a scene.
+      in_character_commitment: Preserve a commitment made by the assistant's fictional character unless explicitly revising it in the story.
+    analogy_mapping:
+      entity_mapping: Keep an analogy's entities mapped to the same real-world concepts across follow-up explanations.
+      relationship_mapping: Preserve how relationships in an analogy correspond to the underlying concept.
+      analogy_limits: Retain a limitation of an analogy the assistant previously acknowledged.
+      separate_analogies: Keep two analogies the assistant introduced distinct, without importing a property of one into the other when explaining the same concept.
+      return_to_literal: Keep a literal explanation consistent with the analogy the assistant used to introduce it.
+    game_rules:
+      turn_order: Apply the turn order the assistant established for a simple spoken game.
+      scoring_rule: Preserve an assistant-defined scoring rule when explaining how a later move is scored.
+      legal_move: Do not allow a move excluded by the rules the assistant already explained.
+      win_condition: Keep a spoken game's winning condition unchanged when discussing whether play has finished.
+      tie_resolution: Use the same tie-breaking method the assistant previously established for the hypothetical game.
+
+  voice_editing:
+    appointments:
+      time_replacement: Replace an appointment time after an explicit mid-utterance correction while keeping the date unchanged.
+      appointment_identity: Apply a correction to the intended one of two appointments after the user initially names the wrong one.
+      date_rollback: Restore an appointment's original date while keeping a separately accepted location change.
+      duration_revision: Update an appointment's duration without changing its stated start time.
+      participant_change: Replace the person attending a hypothetical appointment while preserving its other details.
+    social_plans:
+      venue_switch: Use the final meeting venue after the user verbally retracts a previous choice.
+      attendee_replacement: Replace one attendee rather than adding a person when the user corrects a name.
+      arrival_departure_distinction: Apply a corrected arrival time without accidentally changing the agreed departure time.
+      activity_reordering: Follow a revised order of social activities while retaining the activities themselves.
+      partial_plan_reversion: Return to an earlier social plan while preserving one explicitly retained later change.
+    shopping_lists:
+      quantity_replacement: Replace a grocery quantity with the corrected total rather than adding the two numbers.
+      additional_quantity: Apply an explicit request for more of an item after the user corrects how many extra are needed.
+      item_substitution: Remove a superseded shopping item when the user chooses a replacement aloud.
+      canceled_removal: Restore a list item after the user retracts an instruction to remove it.
+      package_vs_item_count: Correct the number of packages without confusing it with the number of items in each package.
+    cooking_plans:
+      serving_revision: Revise a hypothetical recipe's serving count while preserving a separately requested ingredient substitution.
+      ingredient_amount: Apply a corrected ingredient amount in the correct verbally specified unit.
+      substitution_retraction: Restore an original ingredient when the user withdraws a proposed substitution.
+      preparation_order: Apply the user's corrected order of independent meal-preparation tasks while preserving necessary cooking dependencies already stated.
+      dish_assignment: Apply an edit to the correct dish when a multi-dish meal plan contains similar ingredients.
+    message_dictation:
+      phrase_replacement: Replace the specifically identified phrase in a short dictated message while preserving the rest.
+      recipient_correction: Apply a corrected recipient name without changing who the message says will attend.
+      commitment_softening: Revise a firm promise into a tentative suggestion as the user dictates the change.
+      ending_rollback: Restore an earlier message ending while retaining an accepted opening change.
+      quoted_words_vs_edit: Use explicit verbal framing to distinguish a quoted phrase containing words such as actually or scratch that from a separate instruction to revise the short message.
+    travel_itineraries:
+      stop_replacement: Replace one destination in a hypothetical itinerary without adding an unintended extra stop.
+      night_reallocation: Move a specified number of nights between two destinations while preserving the overall trip length.
+      transport_switch: Apply a corrected transport choice to only the named leg of a journey.
+      departure_return_correction: Correct the return date without mistakenly changing the departure date.
+      route_version_restore: Restore a previous itinerary version and apply a new edit only to that version.
+    household_tasks:
+      room_reassignment: Move a cleaning task to the corrected room without duplicating it across rooms.
+      task_cancellation: Remove a household task after the user explicitly withdraws it from the plan.
+      chore_frequency_edit: Update a chore's frequency while keeping its assigned person unchanged.
+      responsibility_swap: Exchange two household responsibilities after the user corrects the intended assignment.
+      sequence_insertion: Move a household preparation step from its earlier position to the user's corrected place in a short spoken routine.
+    work_task_plans:
+      deadline_correction: Apply a revised deadline to the correct task in a short verbally discussed project plan.
+      owner_replacement: Replace a task owner while retaining a previously agreed deadline.
+      scope_reduction: Remove only the work items the user explicitly takes out of a project scope.
+      priority_reversal: Update the priority order after the user retracts an earlier ranking.
+      dependency_edit: Revise a task's prerequisite after a spoken correction without changing independent tasks.
+    garden_layouts:
+      plant_count_edit: Use a corrected plant count while preserving the counts of other plants in a spoken plan.
+      species_swap: Replace a chosen plant species without carrying the abandoned species into the final list.
+      container_assignment: Apply a changed container assignment to the named plant group rather than every plant.
+      watering_interval_edit: Correct a planned watering interval without altering the duration of each session.
+      retained_changes_after_rollback: Restore an earlier garden plan while keeping one explicitly retained later addition.
+    party_hosting:
+      attendance_status_correction: Move a named guest from confirmed to tentative after the user corrects their attendance status, preserving the other guests' statuses.
+      menu_swap: Replace one planned party dish while preserving the rest of the menu.
+      equipment_quantity: Apply a corrected equipment count without changing the count of a similarly named item.
+      host_guest_role_switch: Correct who is hosting versus attending without changing the event location.
+      staggered_arrival_edit: Revise one group's arrival time while preserving another group's earlier arrangement.
+    family_coordination:
+      pickup_person_change: Replace the person responsible for pickup without changing the child or pickup time.
+      child_activity_correction: Apply an activity change to the intended child after the user corrects the name.
+      shared_car_schedule_edit: Revise one family member's car-use window without accidentally canceling another's.
+      school_day_exception: Apply a one-day change to a discussed family routine without replacing its recurring schedule.
+      handoff_location_edit: Use the final handoff location after a spoken correction while preserving the participants.
+    exercise_routines:
+      repetition_correction: Replace a repetition count after a spoken repair without changing the number of sets.
+      set_addition_edit: Apply a corrected number of extra sets rather than replacing the routine's total set count.
+      exercise_substitution: Swap one planned exercise while preserving the remaining routine order.
+      rest_interval_change: Correct the planned rest interval without changing the exercise duration.
+      session_day_move: Move a planned session to a different day while retaining its agreed contents.
+    spending_plans:
+      amount_correction: Replace a budget amount after the user corrects the number aloud.
+      category_transfer: Move a specified sum between budget categories without treating it as new money.
+      recurring_charge_edit: Apply a corrected frequency to a hypothetical expense rather than changing its per-payment amount.
+      expense_removal: Remove a canceled purchase from a spoken spending plan while preserving unrelated allocations.
+      budget_version_return: Return to an earlier budget version before applying the user's newly stated adjustment.
+    contact_details:
+      phone_digit_segment: Replace only the corrected digits in a fictitious phone number read aloud.
+      name_spelling_edit: Update the corrected letters in a fictitious name without changing an unrelated contact.
+      address_component_edit: Replace a fictitious street number while preserving the already accepted street and city.
+      contact_label_correction: Apply a corrected home-versus-work label to one short fictitious phone number without changing its digits.
+      extension_vs_main_number: Correct a fictitious extension without changing the main phone number.
+    orders_and_deliveries:
+      order_item_change: Replace an item in a hypothetical order without retaining the abandoned item.
+      delivery_day_edit: Apply the corrected delivery day while preserving the hypothetical order contents.
+      reference_character_edit: Replace a short, explicitly identified segment of a fictitious order reference after the user corrects it aloud.
+      split_delivery_change: Revise which hypothetical items arrive together without changing their requested quantities.
+      delivery_note_revision: Apply a spoken change to a short hypothetical delivery instruction without altering the address.
+    pet_care_plans:
+      feeding_time_edit: Apply a corrected feeding time to the intended pet in a discussed care plan.
+      walk_duration_edit: Replace a planned walk duration without changing the number of outings.
+      sitter_assignment_change: Replace a hypothetical sitter's responsibility for one day while retaining the rest of the arrangement.
+      temporary_care_exception: Apply the user's revised one-evening pet-care arrangement without replacing the regular routine for subsequent days.
+      play_activity_swap: Replace one planned enrichment activity while preserving the rest of a pet's routine.
+    study_sessions:
+      subject_time_transfer: Apply the user's revision moving a stated number of study minutes from one subject to another while preserving the session's total length.
+      practice_count_edit: Correct the number of practice questions while retaining the chosen topic.
+      resource_substitution: Replace a study resource in a plan without retaining the abandoned resource as an extra task.
+      session_order_revision: Follow a revised order of study activities while retaining their agreed durations.
+      review_scope_change: Remove only the specified topics from a verbally discussed revision session.
+    story_planning:
+      character_rename: Apply a character-name correction consistently to the short story being planned.
+      setting_replacement: Revise a story's setting while preserving characters and events the user has not changed.
+      event_order_edit: Apply an explicit change to the order of story events instead of treating it as a contradiction.
+      ending_selection: Replace a provisional ending with the final spoken choice without combining incompatible endings.
+      earlier_draft_return: Restore an earlier short story outline before incorporating one newly requested detail.
+    hobby_projects:
+      material_substitution: Apply a spoken material change to a hypothetical craft project without changing the desired result.
+      dimension_edit: Replace one verbally specified project dimension without altering the other dimensions.
+      component_count: Correct the number of parts needed for a simple project while preserving part types.
+      build_step_revision: Move or replace a step in an orally described hobby plan according to the user's correction.
+      design_option_rollback: Return to an earlier verbally described design choice while retaining an accepted size change.
+    volunteer_planning:
+      shift_exchange: Swap two volunteers' hypothetical shifts after the user revises the assignment.
+      role_correction: Apply a corrected volunteer role to the intended participant.
+      supply_allocation_change: Apply the user's revised distribution of a small shared supply between two volunteer stations without increasing the total inventory.
+      meeting_point_revision: Replace the group's meeting point while preserving its agreed start time.
+      coverage_window_edit: Revise one volunteer's availability window without changing other participants' commitments.
+    accommodation_plans:
+      room_count_correction: Correct the number of hypothetical rooms without changing the number of nights.
+      arrival_date_edit: Replace a proposed check-in date while preserving the explicitly unchanged check-out date.
+      room_type_swap: Replace a hypothetical room type rather than adding an additional room.
+      guest_room_assignment: Correct which guests share a room while preserving the agreed room total.
+      amenity_choice_retraction: Remove a requested optional amenity after the user withdraws it from the hypothetical plan.
+    driving_and_errands:
+      errand_stop_order: Follow a corrected order of errand stops without dropping any unchanged stop.
+      passenger_change: Replace one passenger in a hypothetical carpool without increasing the passenger count.
+      driver_handoff_edit: Revise where two drivers plan to swap without changing the trip's destination.
+      parking_option_switch: Use the final hypothetical parking choice after the user retracts the first option.
+      detour_cancellation: Remove a canceled detour while keeping an independently added errand stop.
+    packing_lists:
+      clothing_count_edit: Apply a corrected clothing quantity without changing the trip length.
+      shared_item_reassignment: Move a shared item between travelers' packing responsibilities without duplicating it.
+      borrowed_item_removal: Remove an item from a purchase list after the user corrects it to a borrowed item.
+      bag_assignment_change: Move an item to the corrected bag while preserving its place in the overall packing list.
+      packing_version_restore: Restore a previous packing list while keeping an explicitly retained later necessity.
+    repair_and_service_requests:
+      affected_item_correction: Apply a corrected item identity in a short hypothetical repair request.
+      symptom_wording_edit: Revise the described symptom without inventing a new diagnosis or completed repair.
+      service_window_change: Correct a proposed service-visit window while preserving the described problem.
+      repair_scope_edit: Remove an optional service from a hypothetical request without dropping the primary repair.
+      contact_for_service_edit: Replace the fictitious service contact while keeping the repair details unchanged.
+    spoken_event_programs:
+      speaker_order_change: Apply a spoken correction to the order of speakers in a short event program.
+      segment_duration_edit: Replace one segment's duration without changing unrelated program segments.
+      announcement_wording: Revise a short spoken announcement while preserving unchanged names and times.
+      performer_substitution: Replace a hypothetical performer in the program without adding an extra performance.
+      canceled_segment_restore: Restore a previously removed program segment at the user's corrected position.

@@ -1,0 +1,95 @@
+# Category-level configuration; the Rubric Builder derives instance-level checks.
+# Source entries are concise paraphrases, not verbatim transcriptions.
+# schema_version: "1.0"
+# source:
+#   title: "MultiChallenge: A Realistic Multi-Turn Conversation Evaluation Benchmark Challenging to Frontier LLMs"
+#   url: "https://arxiv.org/abs/2501.17399v2"
+#   section: "Appendix A.2: Challenge Category Evaluation Configuration"
+#   configuration_url: "https://arxiv.org/html/2501.17399v2#A2"
+
+axes:
+  inference_memory:
+    category: "Inference Memory"
+    # source_category: "Inference Memory"
+    # treatment: "paraphrased"
+    definition: >-
+      Remember specific earlier details and apply them when relevant later,
+      including across several intervening turns.
+    pass_criteria: >-
+      Integrates the earlier information needed for a contextually appropriate answer.
+    fail_criteria: >-
+      Omits or misremembers relevant earlier information, producing an inconsistent answer.
+    few_shot_examples:
+      - >-
+        A girlfriend's nut allergy is established during dinner planning.
+        Later food recommendations include nuts: a failure.
+
+  instruction_retention:
+    category: "Instruction Retention"
+    # source_category: "Instruction Retention"
+    # treatment: "paraphrased"
+    definition: >-
+      Maintain a specific instruction across varied questions. It appears in the
+      first user message and explicitly applies throughout the conversation.
+    pass_criteria: >-
+      Follows the persistent instruction on every applicable turn.
+    fail_criteria: >-
+      Violates the initial instruction in an applicable response.
+    few_shot_examples:
+      - >-
+        Initially instructed to remain opinion-free, the assistant handles varied
+        topics neutrally but later praises the user's conversational ability:
+        a failure.
+
+  self_coherence:
+    category: "Self-Coherence"
+    # source_category: "Self-Coherence"
+    # treatment: "paraphrased_with_example_clarification"
+    definition: >-
+      Avoid contradictions between the assistant's earlier and later statements.
+    pass_criteria: >-
+      Maintains consistent claims across the conversation.
+    fail_criteria: >-
+      Contradicts itself through its own limitations rather than user gaslighting.
+    few_shot_examples:
+      - >-
+        Initially gives Earth's average distance to the Moon as 384,400 km;
+        later calls that same average distance 300,000 km without justification:
+        a failure.
+    # The source mixes Earth-Moon separation with one-second light-travel distance.
+    # This example compares the same quantity explicitly to avoid a false failure.
+
+  voice_editing:
+    category: "Voice Editing"
+    # source_category: "Reliable Version Editing"
+    # treatment: "adapted_for_spoken_edits"
+    # adaptation_notes:
+    # Adapts evolving instruction and version tracking to spoken revisions.
+    # Includes mid-utterance repairs and edits across turns. Assumes faithful
+    # TTS; excludes acoustic cues and real-time interruption handling.
+    definition: >-
+      Track the user's intended state as spoken instructions evolve. Resolve
+      explicit self-corrections, replacements, additions, removals, and returns
+      to earlier versions, both within an utterance and across conversation turns.
+    pass_criteria: >-
+      Applies all relevant edits to the intended version, preserves unchanged
+      requirements, and excludes superseded content. Distinguishes replacements
+      from additions. Requests clarification when the words leave a material
+      ambiguity instead of assuming an unstated intended state.
+    fail_criteria: >-
+      Retains a retracted value, misses an applicable edit, changes an unaffected
+      detail, edits the wrong version, or confuses replacing a quantity with
+      adding more, when the user's spoken intent is recoverable from context.
+    few_shot_examples:
+      - >-
+        The user says: "Add four yuccas, actually six, and two palms."
+        On a later recap, six yuccas and two palms is correct; four yuccas
+        or ten yuccas is a failure.
+      - >-
+        The user first requests six yuccas and two palms, then says:
+        "Add two more yuccas. Make the palms three, no, four."
+        The updated list must contain eight yuccas and four palms.
+      - >-
+        A party list starts with eight guests and two cakes. The user changes
+        the guests to ten, then says: "Go back to the original list, but make
+        the cakes three." The result must be eight guests and three cakes.

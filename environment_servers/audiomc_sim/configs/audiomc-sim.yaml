@@ -1,0 +1,80 @@
+planner_model:
+  responses_api_models:
+    vllm_model:
+      entrypoint: app.py
+      base_url: https://inference-api.nvidia.com/v1
+      api_key: ${oc.env:OPENAI_API_KEY}
+      model: openai/openai/gpt-6-sol
+      return_token_id_information: false
+      uses_reasoning_parser: true
+      audio_root: null
+user_teacher_model:
+  responses_api_models:
+    vllm_model:
+      entrypoint: app.py
+      base_url: https://inference-api.nvidia.com/v1
+      api_key: ${oc.env:OPENAI_API_KEY}
+      model: gcp/google/gemini-4-argon
+      return_token_id_information: false
+      uses_reasoning_parser: true
+      audio_root: null
+assistant_model:
+  responses_api_models:
+    vllm_model:
+      entrypoint: app.py
+      base_url: http://127.0.0.1:8000/v1
+      api_key: unused
+      model: vllm_local
+      return_token_id_information: false
+      uses_reasoning_parser: true
+      audio_root: ${oc.env:AUDIOMC_OUTPUT_DIR}/artifacts
+assistant:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      model_server:
+        name: assistant_model
+        type: responses_api_models
+      max_steps: 1
+      execute_tools: false
+resources:
+  resources_servers:
+    audiomc_sim:
+      entrypoint: app.py
+      rubric_builder_model:
+        name: planner_model
+        type: responses_api_models
+      critiquer_model:
+        name: planner_model
+        type: responses_api_models
+      domain: instruction_following
+      artifact_root: ${oc.env:AUDIOMC_OUTPUT_DIR}/artifacts
+      tts_endpoint: https://inference-api.nvidia.com/v1/audio/speech
+      tts_api_key: ${oc.env:OPENAI_API_KEY}
+      tts_voices: [alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin, cedar]
+      num_workers: 1
+environment:
+  environment_servers:
+    audiomc_sim:
+      entrypoint: app.py
+      assistant_agent:
+        name: assistant
+        type: responses_api_agents
+      planner_model:
+        name: planner_model
+        type: responses_api_models
+      user_model:
+        name: user_teacher_model
+        type: responses_api_models
+      teacher_model:
+        name: user_teacher_model
+        type: responses_api_models
+      resources_server:
+        name: resources
+        type: resources_servers
+      cleanup_timeout_seconds: 20
+      default_episode_timeout_seconds: 2400
+      max_concurrent_episodes: 1
+      queue_timeout_seconds: 30
+environment_server_routes:
+  audiomc_sim:generated: environment

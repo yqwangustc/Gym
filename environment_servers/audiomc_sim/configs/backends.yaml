@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Each role can independently use any OpenAI-compatible local or remote endpoint.
+# api_key defaults to "unused" if omitted. Keep real keys in environment variables.
+# Identical text settings share a Gym wrapper; this does not start model servers.
+planner:
+  api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
+  model_name: openai/openai/gpt-6-sol
+  api_key: ${oc.env:OPENAI_API_KEY}
+  uses_reasoning_parser: true
+rubric_builder:
+  api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
+  model_name: openai/openai/gpt-6-sol
+  api_key: ${oc.env:OPENAI_API_KEY}
+critiquer:
+  api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
+  model_name: openai/openai/gpt-6-sol
+  api_key: ${oc.env:OPENAI_API_KEY}
+user:
+  api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
+  model_name: gcp/google/gemini-4-argon
+  api_key: ${oc.env:OPENAI_API_KEY}
+teacher:
+  api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
+  model_name: gcp/google/gemini-4-argon
+  api_key: ${oc.env:OPENAI_API_KEY}
+assistant:
+  api_base: http://127.0.0.1:8000/v1
+  model_name: vllm_local
+  # Optional provenance only; serving is managed separately.
+  checkpoint: ""
+tts:
+  api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
+  model_name: openai/openai/gpt-4o-mini-tts
+  api_key: ${oc.env:OPENAI_API_KEY}
+  # Choose one voice per conversation and keep it for every user turn.
+  voices: [alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin, cedar]
