@@ -323,8 +323,10 @@ async def test_synthesis_uses_one_selected_voice_for_all_turns_and_records_it(re
         wav.setsampwidth(2)
         wav.setframerate(24000)
         wav.writeframes(b"\x00\x00" * 240)
-    http = AsyncMock(return_value=SimpleNamespace(ok=True, read=AsyncMock(return_value=buffer.getvalue())))
-    monkeypatch.setattr("resources_servers.audiomc_sim.app.http_request", http)
+    http = AsyncMock(
+        return_value=SimpleNamespace(ok=True, read=AsyncMock(return_value=buffer.getvalue()), release=lambda: None)
+    )
+    monkeypatch.setattr("resources_servers.audiomc_sim.speech.http_request", http)
     session = resources._sessions["session"]
     for index in range(2):
         text = f"User turn {index}"

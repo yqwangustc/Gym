@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# ORD example. Relative paths resolve against this file; environment overrides use ${oc.env:NAME}.
+repos:
+  nemo_gym: /lustre/fsw/portfolios/llmservice/users/yongqiangw/repos/nemo-gym/audiomc_sim
+container: /lustre/fsw/portfolios/llmservice/users/yongqiangw/resources/containers/vllm-v0.30.0-cu129-te-d16c7543-sm80.sqsh
+mc_resources:
+  persona: /lustre/fsw/portfolios/llmservice/users/yongqiangw/workspace/audiomc_sim/resources/persona/nemotron-usa.jsonl
+  eval_axis: /lustre/fsw/portfolios/llmservice/users/yongqiangw/workspace/audiomc_sim/resources/eval_axis.yaml
+  topics: /lustre/fsw/portfolios/llmservice/users/yongqiangw/workspace/audiomc_sim/resources/expanded_topics.yaml
+  assistant_system_prompt: ../prompts/assistant/system.md
+environment: ~/.megatron_exp.rc
+backend: backend.ord.yaml
+output: /lustre/fsw/portfolios/llmservice/users/yongqiangw/workspace/audiomc_sim/v2
+simulation_tasks:
+  # Accepted SFT examples, rather than total attempted conversations.
+  target_trajectory: 12000
+  seed: 44
+  max_turns: 6
+  max_teacher_trials: 3
+  concurrency: 128
+  max_rollouts: 24000
+  export_every_min: 230
+  export_reserve_min: 10
+  max_audio_files: 50000
+slurm:
+  partition: interactive_singlenode
+  account: nemotron_speech_chat
+  time: '04:00:00'
+  gpus: 8
+  cpus_per_task: 32
+  exclusive: true
+  # Gym's prepared environment runs the controller; each serving.python uses the image's vLLM.
+  # Mounts below also expose uv's interpreter under /home. Rebuild/use a container Gym
+  # environment instead if this host environment is incompatible with the image.
+  python: ${repos.nemo_gym}/.venv/bin/python
+  container_mounts: [/lustre:/lustre, /home:/home]

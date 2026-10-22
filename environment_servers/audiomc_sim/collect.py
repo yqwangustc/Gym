@@ -118,6 +118,8 @@ def graph_config(
                 "tts_api_key": tts["api_key"],
                 "tts_model": tts["model_name"],
                 "tts_voices": tts["voices"],
+                "tts_request_timeout_seconds": tts.get("request_timeout_seconds", 180),
+                "tts_request_attempts": tts.get("request_attempts", 1),
                 "num_workers": 1,
             }
         }
@@ -307,7 +309,20 @@ async def collect(args: argparse.Namespace) -> None:
                 f"elapsed_minutes={(checkpoint_started - started) / 60:.2f}",
                 flush=True,
             )
-            await asyncio.to_thread(export_collection, output, max_audio_files=max_audio_files)
+            # Cancelling an asyncio waiter does not stop its worker thread. Keep the
+            # export lock until publication finishes so deadline export cannot race it.
+            publication = asyncio.create_task(
+                asyncio.to_thread(export_collection, output, max_audio_files=max_audio_files)
+            )
+            cancellation = None
+            while not publication.done():
+                try:
+                    await asyncio.shield(publication)
+                except asyncio.CancelledError as error:
+                    cancellation = error
+            publication.result()
+            if cancellation is not None:
+                raise cancellation
             print(f"Checkpoint export finished in {perf_counter() - checkpoint_started:.2f}s", flush=True)
 
         async def timed_exports() -> None:

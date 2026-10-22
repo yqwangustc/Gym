@@ -5,12 +5,16 @@
 #     --backend-config environment_servers/audiomc_sim/backend.yaml \
 #     --personas /path/to/personas.jsonl --output /path/to/collection
 #
-# To move User to local serving, change only user.api_base/model_name and omit
-# user.api_key (or set it to unused). Example: http://127.0.0.1:8001/v1, vllm_local.
+# For an existing local User endpoint, change user.api_base/model_name and omit
+# user.api_key (or set it to unused). For Slurm-managed startup, also add serving.
+# Example endpoint/model: http://127.0.0.1:8001/v1, user_local.
 # To use a role-specific API credential, set api_key: ${oc.env:TEACHER_API_KEY}.
 # Each role can independently use any OpenAI-compatible local or remote endpoint.
 # api_key defaults to "unused" if omitted. Keep real keys in environment variables.
-# Identical text settings share a Gym wrapper; this does not start model servers.
+# Identical text settings share a Gym wrapper.
+# Direct collect connects to existing endpoints. The Slurm launcher additionally
+# starts services with a non-null serving block; see slurm/tasks.ord.yaml.
+# API credentials should remain environment references, not literal keys.
 planner:
   api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
   model_name: openai/openai/gpt-6-sol
@@ -35,9 +39,31 @@ teacher:
 assistant:
   api_base: http://127.0.0.1:8000/v1
   model_name: vllm_local
-  # Optional provenance only; serving is managed separately.
+  # Existing endpoint by default. Set provenance here when serving is external.
   checkpoint: ""
+  serving: null
+  # For Slurm-managed startup, replace null with a block like this. Adapt GPU
+  # selection/parallelism to the allocation; keep site paths in deployment YAML.
+  # serving:
+  #   interface: nemo_audio
+  #   entrypoint: ${oc.env:ASSISTANT_SERVER_ENTRYPOINT}
+  #   checkpoint: ${oc.env:ASSISTANT_CHECKPOINT}
+  #   cuda_visible_devices: [0]
+  #   tp: 1
+  #   dp: 1
+  #   ep: 1
+  #   max_num_seqs_per_dp_rank: 32
+  #   prefix_cache: true
+  #   audio_limit: 50
+  #   max_model_len: 16384
+  #   gpu_memory_utilization: 0.90
+  #   reasoning_parser: nemotron_v3
+  #   extra_args: [--audio-mode, offline, --image-limit, '0', --video-limit, '0']
+  #   engine_args: [--mm-processor-cache-gb, '0']
 tts:
+  # Match the bounded retry policy used in the Slurm deployment example.
+  request_timeout_seconds: 45
+  request_attempts: 4
   api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
   model_name: openai/openai/gpt-4o-mini-tts
   api_key: ${oc.env:OPENAI_API_KEY}

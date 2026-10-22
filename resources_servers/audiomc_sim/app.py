@@ -24,8 +24,6 @@ from nemo_gym.base_resources_server import (
     SimpleResourcesServer,
 )
 from nemo_gym.config_types import AggregateMetrics, AggregateMetricsRequest, ModelServerRef
-from nemo_gym.server_utils import raise_for_status
-from nemo_gym.server_utils import request as http_request
 from resources_servers.audiomc_sim.common import Prompts, digest, infer, parse_json, prompt_values
 from resources_servers.audiomc_sim.contracts import (
     AudioRef,
@@ -42,6 +40,7 @@ from resources_servers.audiomc_sim.contracts import (
     TaskInput,
     TraceRequest,
 )
+from resources_servers.audiomc_sim.speech import synthesize_bytes
 from resources_servers.audiomc_sim.telemetry import trace_call
 
 
@@ -53,6 +52,8 @@ class AudioMCSimConfig(BaseResourcesServerConfig):
     prompts_dir: str = "resources_servers/audiomc_sim/prompts"
     tts_endpoint: str
     tts_api_key: str
+    tts_request_timeout_seconds: float = Field(default=180, gt=0)
+    tts_request_attempts: int = Field(default=1, ge=1)
     tts_model: str = "openai/openai/gpt-4o-mini-tts"
     tts_voice: str = "alloy"
     tts_voices: list[str] | None = Field(default=None, min_length=1)
@@ -264,23 +265,21 @@ class AudioMCSimResources(SimpleResourcesServer):
             prefix = session.prefixes.get(body.turn_index)
             if not prefix or prefix[-1]["text"] != body.text:
                 raise HTTPException(409, "Speech must match the frozen latest user utterance")
-            with trace_call(session.invocations, "tts", turn_index=body.turn_index):
-                async with asyncio.timeout(180):
-                    response = await http_request(
-                        method="POST",
-                        url=self.config.tts_endpoint,
-                        headers={"Authorization": f"Bearer {self.config.tts_api_key}"},
-                        json={
-                            "model": self.config.tts_model,
-                            "input": body.text,
-                            "voice": session.voice,
-                            "response_format": "wav",
-                            "instructions": "Speak naturally. Preserve every supplied word, including corrections. Do not paraphrase.",
-                        },
-                        _max_num_tries=3,
-                    )
-                    await raise_for_status(response)
-                    audio_bytes = await response.read()
+            audio_bytes = await synthesize_bytes(
+                endpoint=self.config.tts_endpoint,
+                api_key=self.config.tts_api_key,
+                payload={
+                    "model": self.config.tts_model,
+                    "input": body.text,
+                    "voice": session.voice,
+                    "response_format": "wav",
+                    "instructions": "Speak naturally. Preserve every supplied word, including corrections. Do not paraphrase.",
+                },
+                timeout_seconds=self.config.tts_request_timeout_seconds,
+                attempts=self.config.tts_request_attempts,
+                events=session.invocations,
+                turn_index=body.turn_index,
+            )
             with wave.open(io.BytesIO(audio_bytes), "rb") as wav:
                 rate = wav.getframerate()
                 frames = len(wav.readframes(wav.getnframes())) // (wav.getnchannels() * wav.getsampwidth())

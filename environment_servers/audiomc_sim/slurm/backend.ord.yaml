@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+planner:
+  api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
+  model_name: openai/openai/gpt-6-sol
+  api_key: ${oc.env:OPENAI_API_KEY}
+  uses_reasoning_parser: true
+rubric_builder:
+  api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
+  model_name: openai/openai/gpt-6-sol
+  api_key: ${oc.env:OPENAI_API_KEY}
+critiquer:
+  api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
+  model_name: openai/openai/gpt-6-sol
+  api_key: ${oc.env:OPENAI_API_KEY}
+user:
+  api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
+  model_name: gcp/google/gemini-4-argon
+  api_key: ${oc.env:OPENAI_API_KEY}
+teacher:
+  api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
+  model_name: gcp/google/gemini-4-argon
+  api_key: ${oc.env:OPENAI_API_KEY}
+assistant:
+  api_base: http://127.0.0.1:8000/v1
+  model_name: vllm_local
+  serving:
+    interface: nemo_audio
+    entrypoint: /lustre/fsw/portfolios/llmservice/users/yongqiangw/repos/megatron-lm/staged-for-eval/examples/multimodal/v3_mini_sft/vllm_nemo_server/serve.py
+    checkpoint: /lustre/fsw/portfolios/llmservice/users/yongqiangw/results/omni_sft/s-exp/s3/checkpoints/tp_1_hf/iter_0007000/mcore_to_hf
+    cuda_visible_devices: [0, 1, 2, 3, 4, 5, 6, 7]
+    tp: 1
+    dp: 8
+    ep: 8
+    max_num_seqs_per_dp_rank: 32
+    prefix_cache: true
+    audio_limit: 50
+    max_model_len: 16384
+    gpu_memory_utilization: 0.90
+    reasoning_parser: nemotron_v3
+    extra_args: [--audio-mode, offline, --image-limit, '0', --video-limit, '0']
+    engine_args: [--mm-processor-cache-gb, '0']
+tts:
+  # Most successful calls take seconds; retry a stalled request on a new connection.
+  request_timeout_seconds: 45
+  request_attempts: 4
+  api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
+  model_name: openai/openai/gpt-4o-mini-tts
+  api_key: ${oc.env:OPENAI_API_KEY}
+  # Choose one voice per conversation and keep it for every user turn.
+  voices: [alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin, cedar]
