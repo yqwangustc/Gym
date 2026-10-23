@@ -5,6 +5,7 @@
 import argparse
 import asyncio
 import json
+import logging
 import math
 import os
 import shlex
@@ -29,6 +30,48 @@ from resources_servers.audiomc_sim.prepare import prepare_tasks
 from resources_servers.audiomc_sim.storage import read_episode_records, recover_export
 from responses_api_agents.simple_agent.app import SimpleAgent, SimpleAgentConfig
 from responses_api_models.vllm_model.app import VLLMModel, VLLMModelConfig
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+async def shutdown_graph(participants: list[tuple[str, uvicorn.Server, asyncio.Task]]) -> None:
+    """Drain callers before their dependencies, including canceled HTTP handlers.
+
+    Uvicorn can finish serving while canceled ASGI handlers are still unwinding.
+    Keep Resources and model servers available until those handlers have finished
+    finalizing and closing their sessions.
+    """
+    for kinds in (
+        {"environment_servers"},
+        {"responses_api_agents"},
+        {"resources_servers"},
+        {"responses_api_models"},
+    ):
+        stage = [(server, task) for kind, server, task in participants if kind in kinds]
+        if not stage:
+            continue
+        for server, _ in stage:
+            server.should_exit = True
+        pending = {task for _, task in stage if not task.done()}
+        if pending:
+            _, pending = await asyncio.wait(pending, timeout=5)
+        # ASGI tasks are owned by server_state, not by Server.serve().
+        pending.update(task for server, _ in stage for task in server.server_state.tasks if not task.done())
+        if pending:
+            _, pending = await asyncio.wait(pending, timeout=30)
+        if pending:
+            LOGGER.warning("Forcing shutdown of %s remaining Gym tasks in %s", len(pending), kinds)
+            for server, _ in stage:
+                server.force_exit = True
+            for task in pending:
+                task.cancel()
+            _, pending = await asyncio.wait(pending, timeout=5)
+            if pending:
+                LOGGER.error("%s Gym tasks did not stop within the shutdown budget", len(pending))
+        for _, task in stage:
+            if task.done() and not task.cancelled() and task.exception() is not None:
+                LOGGER.warning("Gym server stopped with an error", exc_info=task.exception())
 
 
 def load_env(path: Path) -> None:
@@ -157,7 +200,7 @@ async def serve_graph(graph: dict[str, object]) -> AsyncIterator[ServerClient]:
     config = OmegaConf.create(graph)
     os.environ["NEMO_GYM_CONFIG_DICT"] = json.dumps(graph)
     client = ServerClient(head_server_config=BaseServerConfig(host="127.0.0.1", port=1), global_config_dict=config)
-    servers, tasks = [], []
+    servers, tasks, participants = [], [], []
     classes = {
         "responses_api_models": (VLLMModel, VLLMModelConfig),
         "responses_api_agents": (SimpleAgent, SimpleAgentConfig),
@@ -173,11 +216,17 @@ async def serve_graph(graph: dict[str, object]) -> AsyncIterator[ServerClient]:
             instance = cls(config=schema.model_validate(values), server_client=client)
             server = uvicorn.Server(
                 uvicorn.Config(
-                    instance.setup_webserver(), host=raw.host, port=raw.port, log_level="warning", access_log=False
+                    instance.setup_webserver(),
+                    host=raw.host,
+                    port=raw.port,
+                    log_level="warning",
+                    access_log=False,
+                    timeout_graceful_shutdown=0.5,
                 )
             )
             servers.append(server)
             tasks.append(asyncio.create_task(server.serve()))
+            participants.append((kind, server, tasks[-1]))
         async with asyncio.timeout(60):
             while not all(s.started for s in servers):
                 for task in tasks:
@@ -187,15 +236,7 @@ async def serve_graph(graph: dict[str, object]) -> AsyncIterator[ServerClient]:
                 await asyncio.sleep(0.05)
         yield client
     finally:
-        for server in servers:
-            server.should_exit = True
-        try:
-            async with asyncio.timeout(15):
-                await asyncio.gather(*tasks)
-        except TimeoutError:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+        await shutdown_graph(participants)
 
 
 async def collect(args: argparse.Namespace) -> None:

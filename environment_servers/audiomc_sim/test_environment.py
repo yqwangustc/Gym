@@ -184,6 +184,9 @@ async def test_loop_outcomes_and_audio_only_prefix(
         nonlocal current_turn
         data = json.model_dump(exclude_unset=True) if hasattr(json, "model_dump") else json
         calls.append((url_path, data, kwargs))
+        if url_path in {"/verify", "/checkpoint", "/close_session", "/v1/agent_sessions/close"}:
+            assert kwargs["_max_num_tries"] == 1
+            assert kwargs["timeout"].total == env.config.cleanup_timeout_seconds
         if url_path == "/build_rubrics":
             current_turn = data["turn_index"]
             assert data["history"][-1]["role"] == "user"

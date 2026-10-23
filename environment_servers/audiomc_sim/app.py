@@ -4,8 +4,10 @@
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 
+from aiohttp import ClientTimeout
 from fastapi import Body
 from pydantic import JsonValue, PrivateAttr, model_validator
 
@@ -43,6 +45,9 @@ from resources_servers.audiomc_sim.contracts import (
     TurnEvaluation,
 )
 from resources_servers.audiomc_sim.telemetry import trace_call
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class AudioMCSimEnvironmentConfig(BaseEnvironmentServerConfig):
@@ -97,11 +102,19 @@ class AudioMCSimEnvironment(BaseEnvironmentServer[EpisodeRequest, EpisodeRespons
         resource_cookies, assistant_cookies = {}, {}
 
         async def post_resources(path: str, values: dict[str, object]) -> JsonValue:
+            # Internal Gym requests otherwise retry connection failures indefinitely.
+            # Durable finalization can be recovered by the collector on a lost reply.
+            options = (
+                {"_max_num_tries": 1, "timeout": ClientTimeout(total=self.config.cleanup_timeout_seconds)}
+                if path in {"/verify", "/checkpoint", "/close_session"}
+                else {}
+            )
             response = await self.server_client.post(
                 server_name=self.config.resources_server.name,
                 url_path=path,
                 json=values,
                 cookies=resource_cookies,
+                **options,
             )
             resource_cookies.update({key: morsel.value for key, morsel in response.cookies.items()})
             await raise_for_status(response)
@@ -122,6 +135,8 @@ class AudioMCSimEnvironment(BaseEnvironmentServer[EpisodeRequest, EpisodeRespons
                 url_path="/v1/agent_sessions/close",
                 json={"agent_session_id": assistant_session, "episode_id": request.episode_id.model_dump()},
                 cookies=assistant_cookies,
+                _max_num_tries=1,
+                timeout=ClientTimeout(total=self.config.cleanup_timeout_seconds),
             )
             await raise_for_status(response)
 
@@ -338,7 +353,13 @@ class AudioMCSimEnvironment(BaseEnvironmentServer[EpisodeRequest, EpisodeRespons
                 {"role": "termination_error", "error_type": type(error).__name__, "error": str(error)[:2000]}
             )
             if isinstance(error, asyncio.CancelledError):
-                await asyncio.shield(finish("interrupted"))
+                # Await inline: shield() creates a detached finalizer that survives
+                # cancellation and can outlive the Resources server at shutdown.
+                try:
+                    async with asyncio.timeout(self.config.cleanup_timeout_seconds):
+                        await finish("interrupted")
+                except Exception:
+                    LOGGER.exception("Could not finalize interrupted episode %s", episode)
                 raise
             return await finish("infrastructure_failure")
 

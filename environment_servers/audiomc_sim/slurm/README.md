@@ -158,6 +158,12 @@ previous TP1/DP8/EP8, 32 sequences per rank, prefix-cache and audio-limit-50 set
    final export. Cancellation waits for any in-progress periodic export to finish
    before starting the final export, including its worker thread. A hard Slurm kill
    cannot guarantee saving, so retain the reserve.
+   Gym teardown drains the Environment's canceled HTTP handlers before stopping
+   Assistant Agent, Resources, and model wrappers, in that order. Finalization,
+   checkpoint, and session-close RPCs make one attempt with a timeout derived
+   from `cleanup_timeout_seconds`; cancellation does not spawn a detached finalizer.
+   This keeps Resources available for verified-prefix recovery and bounds shutdown
+   if a participant is already unavailable.
 
 Output uses the ordinary collector layout: `rollout.jsonl`, `audio.tar` or bounded
 shards, `episodes.jsonl`, `inspection.jsonl`, `summary.json`, raw `artifacts/`,
