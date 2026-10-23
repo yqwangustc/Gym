@@ -2,8 +2,9 @@
 
 This single-node launcher uses a task YAML and per-role backend YAML. There is no
 concurrency calibration: set `simulation_tasks.concurrency` before submission.
-`tasks.ord.yaml` and `backend.ord.yaml` are deployment examples; cluster-specific
-paths, partition and account appear only in those example files.
+`tasks.ord.yaml` / `backend.ord.yaml` and `tasks.eos.yaml` / `backend.eos.yaml`
+are deployment examples; cluster-specific paths, partition and account appear
+only in those example files.
 
 From the Gym checkout on a login node, using its installed Python environment:
 
@@ -24,6 +25,14 @@ Optionally, to check configuration and API accessibility without submitting a jo
 
 Copy the example task/backend files for another cluster. Any filename works,
 including `tasks.settings.yaml`. No `ORD_*` variables are used.
+
+For EOS, set `AUDIOMC_EOS_REPO` to a prepared checkout containing this
+implementation and `AUDIOMC_EOS_CHECKPOINT` to the intended local model directory,
+either in the shell or in the configured environment file. Both are required.
+Then submit with `--settings environment_servers/audiomc_sim/slurm/tasks.eos.yaml`.
+The example uses the EOS SM90 image and `batch` partition; verify its paths,
+account, and mounted Python environment before use. Both cluster examples collect
+for 235 minutes and reserve five minutes for shutdown and export within four hours.
 
 ## Task settings
 

@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# EOS example. Relative paths resolve against this file; environment overrides use ${oc.env:NAME}.
+# Set AUDIOMC_EOS_REPO to the checkout containing this implementation.
+repos:
+  nemo_gym: ${oc.env:AUDIOMC_EOS_REPO}
+container: /lustre/fsw/nemotron_speech_chat/users/yongqiangw/resources/containers/vllm-v0.30.0-cu129-te-d16c7543-sm90.sqsh
+mc_resources:
+  persona: /lustre/fsw/nemotron_speech_chat/users/yongqiangw/workspace/audiomc_sim/resources/persona/nemotron-usa.jsonl
+  eval_axis: /lustre/fsw/nemotron_speech_chat/users/yongqiangw/workspace/audiomc_sim/resources/eval_axis.yaml
+  topics: /lustre/fsw/nemotron_speech_chat/users/yongqiangw/workspace/audiomc_sim/resources/expanded_topics.yaml
+  assistant_system_prompt: ../prompts/assistant/system.md
+environment: ~/.megatron_exp.rc
+backend: backend.eos.yaml
+output: /lustre/fsw/nemotron_speech_chat/users/yongqiangw/workspace/audiomc_sim/v3
+simulation_tasks:
+  # Trajectories with at least one verified Teacher rewrite, not total attempts.
+  target_trajectory: 12000
+  seed: 0
+  max_turns: 6
+  max_teacher_trials: 5
+  keep_generation_until_max_turn_reached: true
+  cleanup_finished_trajectories: true
+  concurrency: 128
+  max_rollouts: 24000
+  export_every_min: 235
+  export_reserve_min: 5
+  max_audio_files: 50000
+slurm:
+  partition: batch
+  account: nemotron_speech_chat
+  time: '04:00:00'
+  gpus: 8
+  cpus_per_task: 32
+  exclusive: true
+  # Gym's prepared environment runs the controller; each serving.python uses the image's vLLM.
+  # Mounts below also expose uv's interpreter under /home. Rebuild/use a container Gym
+  # environment instead if this host environment is incompatible with the image.
+  python: ${repos.nemo_gym}/.venv/bin/python
+  container_mounts: [/lustre:/lustre, /home:/home]

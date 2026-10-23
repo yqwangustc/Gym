@@ -11,17 +11,19 @@ mc_resources:
   assistant_system_prompt: ../prompts/assistant/system.md
 environment: ~/.megatron_exp.rc
 backend: backend.ord.yaml
-output: /lustre/fsw/portfolios/llmservice/users/yongqiangw/workspace/audiomc_sim/v2
+output: /lustre/fsw/portfolios/llmservice/users/yongqiangw/workspace/audiomc_sim/v3
 simulation_tasks:
-  # Accepted SFT examples, rather than total attempted conversations.
+  # Trajectories with at least one verified Teacher rewrite, not total attempts.
   target_trajectory: 12000
   seed: 44
   max_turns: 6
-  max_teacher_trials: 3
+  max_teacher_trials: 5
+  keep_generation_until_max_turn_reached: true
+  cleanup_finished_trajectories: true
   concurrency: 128
   max_rollouts: 24000
-  export_every_min: 230
-  export_reserve_min: 10
+  export_every_min: 235
+  export_reserve_min: 5
   max_audio_files: 50000
 slurm:
   partition: interactive_singlenode
