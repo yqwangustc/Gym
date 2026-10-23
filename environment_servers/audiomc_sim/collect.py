@@ -60,6 +60,7 @@ def graph_config(
                 "model_name": backend["model_name"],
                 "api_key": backend["api_key"],
                 "uses_reasoning_parser": backend["uses_reasoning_parser"],
+                "reasoning_effort": backend.get("reasoning_effort"),
                 "audio": role == "assistant",
             },
             sort_keys=True,
@@ -81,6 +82,9 @@ def graph_config(
                     "model": backend["model_name"],
                     "return_token_id_information": False,
                     "uses_reasoning_parser": backend["uses_reasoning_parser"],
+                    "sampling_overrides": {"reasoning_effort": backend["reasoning_effort"]}
+                    if backend.get("reasoning_effort") is not None
+                    else None,
                     "audio_root": str(output / "artifacts") if role == "assistant" else None,
                 }
             }

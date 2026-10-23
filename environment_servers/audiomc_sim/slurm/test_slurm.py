@@ -117,7 +117,7 @@ async def test_preflight_checks_external_assistant_deduplicates_and_releases(dep
             self.status = 410 if "assistant.invalid" in url else 200
 
         async def json(self):
-            return {"choices": [{"message": {"content": "hello"}}]}
+            return {"choices": [{"message": {"content": "hello", "reasoning_content": "Native reasoning"}}]}
 
         async def read(self):
             return b"RIFF0000WAVEpayload"
@@ -132,8 +132,9 @@ async def test_preflight_checks_external_assistant_deduplicates_and_releases(dep
     monkeypatch.setattr(preflight, "load_backends", lambda _: backends)
     monkeypatch.setattr(preflight, "request", request)
     results = await preflight.check(settings)
-    assert len(calls) == 3 and calls == released
-    assert results[1]["role"] == "assistant" and not results[1]["ok"]
+    assert len(calls) == 4 and calls == released
+    assistant = next(result for result in results if result["role"] == "assistant")
+    assert not assistant["ok"]
     with pytest.raises(RuntimeError, match="preflight failed"):
         await preflight.require_preflight(settings)
 
@@ -524,3 +525,76 @@ async def test_final_export_waits_for_cancelled_periodic_export(deployment, monk
         else:
             await asyncio.wait_for(task, 2)
     assert order == ["periodic_start", "periodic_finish", "final_start"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field", ["reasoning_content", "reasoning", "missing", "blank", "no_answer", "disabled_parser"]
+)
+async def test_preflight_requires_teacher_native_reasoning_and_forwards_effort(deployment, monkeypatch, field):
+    settings, backends, _ = deployment
+    backends["teacher"]["reasoning_effort"] = "minimal"
+    if field == "disabled_parser":
+        backends["teacher"]["uses_reasoning_parser"] = False
+    calls = []
+
+    class Response:
+        status = 200
+
+        async def json(self):
+            message = {"content": "391"}
+            if field != "missing":
+                message["reasoning" if field == "reasoning" else "reasoning_content"] = (
+                    " " if field == "blank" else "Native reasoning"
+                )
+            if field == "no_answer":
+                message["content"] = ""
+            return {"choices": [{"message": message, "finish_reason": "stop"}]}
+
+        async def read(self):
+            return b"RIFF0000WAVEpayload"
+
+        def release(self):
+            pass
+
+    async def request(method, url, **kwargs):
+        calls.append(kwargs["json"])
+        return Response()
+
+    monkeypatch.setattr(preflight, "load_backends", lambda _: backends)
+    monkeypatch.setattr(preflight, "request", request)
+    results = await preflight.check(settings)
+    teacher = next(result for result in results if result["role"] == "teacher")
+    assert teacher["ok"] is (field in {"reasoning_content", "reasoning"})
+    assert sum(call.get("reasoning_effort") == "minimal" for call in calls) == 1
+    if not teacher["ok"]:
+        with pytest.raises(RuntimeError, match="preflight failed"):
+            await preflight.require_preflight(settings)
+
+
+@pytest.mark.asyncio
+async def test_managed_teacher_reasoning_is_probed_after_startup(deployment, monkeypatch):
+    settings, backends, _ = deployment
+    backends["teacher"] = dict(backends["assistant"])
+    backends["teacher"]["reasoning_effort"] = "minimal"
+    calls = []
+
+    class Response:
+        status = 200
+
+        async def json(self):
+            return {"choices": [{"message": {"content": "391", "reasoning": "Native reasoning"}}]}
+
+        def release(self):
+            pass
+
+    async def request(method, url, **kwargs):
+        calls.append((url, kwargs["json"]))
+        return Response()
+
+    monkeypatch.setattr(preflight, "load_backends", lambda _: backends)
+    monkeypatch.setattr(preflight, "request", request)
+    results = await preflight.check(settings, managed_teacher=True)
+    assert len(results) == 1 and results[0]["role"] == "teacher" and results[0]["ok"]
+    assert calls[0][0] == "http://127.0.0.1:8000/v1/chat/completions"
+    assert calls[0][1]["reasoning_effort"] == "minimal"

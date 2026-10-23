@@ -68,6 +68,7 @@ class Endpoint(BaseModel):
 
 class ModelBackend(Endpoint):
     uses_reasoning_parser: bool = True
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None = None
 
 
 class AssistantBackend(ModelBackend):

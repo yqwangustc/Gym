@@ -14,9 +14,21 @@ user_teacher_model:
       entrypoint: app.py
       base_url: https://inference-api.nvidia.com/v1
       api_key: ${oc.env:OPENAI_API_KEY}
-      model: gcp/google/gemini-4-argon
+      model: nvidia/zai-org/glm-5.2
       return_token_id_information: false
       uses_reasoning_parser: true
+      audio_root: null
+teacher_model:
+  responses_api_models:
+    vllm_model:
+      entrypoint: app.py
+      base_url: https://inference-api.nvidia.com/v1
+      api_key: ${oc.env:OPENAI_API_KEY}
+      model: nvidia/zai-org/glm-5.2
+      return_token_id_information: false
+      uses_reasoning_parser: true
+      sampling_overrides:
+        reasoning_effort: minimal
       audio_root: null
 assistant_model:
   responses_api_models:
@@ -67,7 +79,7 @@ environment:
         name: user_teacher_model
         type: responses_api_models
       teacher_model:
-        name: user_teacher_model
+        name: teacher_model
         type: responses_api_models
       resources_server:
         name: resources

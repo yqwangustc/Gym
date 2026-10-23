@@ -36,7 +36,7 @@ def managed_endpoints(backends: dict[str, dict[str, object]]) -> dict[str, dict[
     return managed
 
 
-async def check(settings: TaskSettings) -> list[dict[str, object]]:
+async def check(settings: TaskSettings, *, managed_teacher: bool = False) -> list[dict[str, object]]:
     """Probe every externally managed text/speech backend, including API assistants."""
     os.environ.setdefault("NEMO_GYM_CONFIG_DICT", "{}")
     backends = load_backends(settings.backend)
@@ -45,11 +45,22 @@ async def check(settings: TaskSettings) -> list[dict[str, object]]:
         validate_selection(LocalServing.model_validate(backend["serving"]), available=settings.slurm.gpus)
     results, seen = [], set()
     for role, backend in backends.items():
-        if backend["api_base"] in managed:
+        if managed_teacher:
+            if role != "teacher" or backend["api_base"] not in managed:
+                continue
+        elif backend["api_base"] in managed:
             continue
         key = OmegaConf.to_container(OmegaConf.create({"key": backend["api_key"]}), resolve=True)["key"]
         speech = role == "tts"
-        identity = (backend["api_base"], backend["model_name"], key, speech)
+        needs_reasoning = role == "teacher"
+        identity = (
+            backend["api_base"],
+            backend["model_name"],
+            key,
+            speech,
+            backend.get("reasoning_effort"),
+            needs_reasoning,
+        )
         if identity in seen:
             continue
         seen.add(identity)
@@ -57,8 +68,20 @@ async def check(settings: TaskSettings) -> list[dict[str, object]]:
         if speech:
             payload.update(input="Hello.", voice=backend["voices"][0], response_format="wav")
         else:
-            payload.update(messages=[{"role": "user", "content": "Say hello."}], max_tokens=32)
+            payload.update(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "What is 17 times 23? Give only the answer." if needs_reasoning else "Say hello.",
+                    }
+                ],
+                max_tokens=1024 if needs_reasoning else 32,
+            )
+            if backend.get("reasoning_effort") is not None:
+                payload["reasoning_effort"] = backend["reasoning_effort"]
         result = {"role": role, "model": backend["model_name"]}
+        if backend.get("reasoning_effort") is not None:
+            result["reasoning_effort"] = backend["reasoning_effort"]
         try:
             response = await request(
                 "POST",
@@ -75,7 +98,22 @@ async def check(settings: TaskSettings) -> list[dict[str, object]]:
                     body = await response.read()
                     result["ok"] = body.startswith(b"RIFF") and body[8:12] == b"WAVE"
                 elif result["ok"]:
-                    result["ok"] = bool((await response.json()).get("choices"))
+                    choices = (await response.json()).get("choices") or []
+                    result["ok"] = bool(choices)
+                    if needs_reasoning:
+                        choice = choices[0] if choices else {}
+                        message = choice.get("message") or {}
+                        reasoning = message.get("reasoning_content") or message.get("reasoning")
+                        answer = message.get("content")
+                        result["native_reasoning_available"] = isinstance(reasoning, str) and bool(reasoning.strip())
+                        if not backend["uses_reasoning_parser"]:
+                            result.update(ok=False, error="Teacher requires uses_reasoning_parser=true")
+                        elif not result["native_reasoning_available"]:
+                            result.update(ok=False, error="Teacher endpoint returned no native reasoning text")
+                        elif not isinstance(answer, str) or not answer.strip():
+                            result.update(ok=False, error="Teacher endpoint returned no final answer")
+                        elif choice.get("finish_reason") == "length":
+                            result.update(ok=False, error="Teacher reasoning probe did not complete")
             finally:
                 response.release()
         except (ClientError, TimeoutError, ValueError) as error:
@@ -84,9 +122,9 @@ async def check(settings: TaskSettings) -> list[dict[str, object]]:
     return results
 
 
-async def require_preflight(settings: TaskSettings) -> None:
+async def require_preflight(settings: TaskSettings, *, managed_teacher: bool = False) -> None:
     """Abort startup if any configured external model fails an actual request."""
-    results = await check(settings)
+    results = await check(settings, managed_teacher=managed_teacher)
     print(json.dumps(results, indent=2), flush=True)
     if not all(result["ok"] for result in results):
         raise RuntimeError("API preflight failed; aborting startup")

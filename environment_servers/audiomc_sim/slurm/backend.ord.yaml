@@ -15,11 +15,13 @@ critiquer:
   api_key: ${oc.env:OPENAI_API_KEY}
 user:
   api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
-  model_name: gcp/google/gemini-4-argon
+  model_name: nvidia/zai-org/glm-5.2
   api_key: ${oc.env:OPENAI_API_KEY}
 teacher:
+  # Forwarded to the API; native reasoning is saved separately from spoken text.
+  reasoning_effort: minimal
   api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
-  model_name: gcp/google/gemini-4-argon
+  model_name: nvidia/zai-org/glm-5.2
   api_key: ${oc.env:OPENAI_API_KEY}
 assistant:
   api_base: http://127.0.0.1:8000/v1

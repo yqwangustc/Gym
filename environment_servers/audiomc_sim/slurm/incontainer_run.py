@@ -220,6 +220,8 @@ async def run(path: Path) -> None:
                     )
             if pending:
                 await asyncio.sleep(2)
+        if backends["teacher"]["api_base"] in services:
+            await require_preflight(settings, managed_teacher=True)
         print("All local services healthy; starting fixed-concurrency collection", flush=True)
         collection = asyncio.create_task(run_collection(settings, backends, job_end=job_end))
         try:

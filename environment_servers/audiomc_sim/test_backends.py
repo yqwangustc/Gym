@@ -64,9 +64,11 @@ def test_each_role_can_move_independently_between_local_and_api(tmp_path, monkey
 def test_default_sharing_and_distinct_backend_ports(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
     graph = graph_config(output=tmp_path, base_port=19000)
-    assert len(graph) == 6
+    assert len(graph) == 7
     assert role_ref(graph, "planner") == role_ref(graph, "rubric_builder") == role_ref(graph, "critiquer")
-    assert role_ref(graph, "user") == role_ref(graph, "teacher")
+    assert role_ref(graph, "user") != role_ref(graph, "teacher")
+    teacher = graph[role_ref(graph, "teacher")["name"]]["responses_api_models"]["vllm_model"]
+    assert teacher["sampling_overrides"] == {"reasoning_effort": "minimal"}
     config, path = write_config(tmp_path)
     for role in TEXT_ROLES:
         config[role]["model_name"] = role
@@ -169,3 +171,21 @@ def test_voice_pool_round_trip_and_legacy_conflict(tmp_path):
     OmegaConf.save(OmegaConf.create(config), path)
     with pytest.raises(ValidationError, match="not both"):
         load_backends(path)
+
+
+def test_reasoning_effort_is_role_specific_and_controls_wrapper_sharing(tmp_path):
+    config, path = write_config(tmp_path)
+    config["teacher"]["reasoning_effort"] = "minimal"
+    OmegaConf.save(OmegaConf.create(config), path)
+    graph = graph_config(output=tmp_path, base_port=19000, backends=load_backends(path))
+    teacher = role_ref(graph, "teacher")["name"]
+    user = role_ref(graph, "user")["name"]
+    assert teacher != user
+    assert graph[teacher]["responses_api_models"]["vllm_model"]["sampling_overrides"] == {
+        "reasoning_effort": "minimal"
+    }
+    assert graph[user]["responses_api_models"]["vllm_model"]["sampling_overrides"] is None
+    config["user"]["reasoning_effort"] = "minimal"
+    OmegaConf.save(OmegaConf.create(config), path)
+    graph = graph_config(output=tmp_path, base_port=19000, backends=load_backends(path))
+    assert role_ref(graph, "user") == role_ref(graph, "teacher")
