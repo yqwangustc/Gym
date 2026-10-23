@@ -26,10 +26,10 @@ Optionally, to check configuration and API accessibility without submitting a jo
 Copy the example task/backend files for another cluster. Any filename works,
 including `tasks.settings.yaml`. No `ORD_*` variables are used.
 
-For EOS, set `AUDIOMC_EOS_REPO` to a prepared checkout containing this
-implementation and `AUDIOMC_EOS_CHECKPOINT` to the intended local model directory,
-either in the shell or in the configured environment file. Both are required.
-Then submit with `--settings environment_servers/audiomc_sim/slurm/tasks.eos.yaml`.
+The EOS example specifies the checkout and checkpoint paths directly. Update
+`repos.nemo_gym` in `tasks.eos.yaml` and `assistant.serving.checkpoint` in
+`backend.eos.yaml` when moving either location. Submit with
+`--settings environment_servers/audiomc_sim/slurm/tasks.eos.yaml`.
 The example uses the EOS SM90 image and `batch` partition; verify its paths,
 account, and mounted Python environment before use. Both cluster examples collect
 for 235 minutes and reserve five minutes for shutdown and export within four hours.

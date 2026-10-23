@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 # EOS example. Relative paths resolve against this file; environment overrides use ${oc.env:NAME}.
-# Set AUDIOMC_EOS_REPO to the checkout containing this implementation.
 repos:
-  nemo_gym: ${oc.env:AUDIOMC_EOS_REPO}
+  nemo_gym: /lustre/fsw/nemotron_speech_chat/users/yongqiangw/repos/nemo-gym/audiomc_sim
 container: /lustre/fsw/nemotron_speech_chat/users/yongqiangw/resources/containers/vllm-v0.30.0-cu129-te-d16c7543-sm90.sqsh
 mc_resources:
   persona: /lustre/fsw/nemotron_speech_chat/users/yongqiangw/workspace/audiomc_sim/resources/persona/nemotron-usa.jsonl

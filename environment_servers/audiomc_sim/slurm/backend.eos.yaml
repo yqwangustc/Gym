@@ -29,8 +29,7 @@ assistant:
   serving:
     interface: nemo_audio
     entrypoint: /lustre/fsw/nemotron_speech_chat/users/yongqiangw/repos/megatron-lm/staged-for-eval/examples/multimodal/v3_mini_sft/vllm_nemo_server/serve.py
-    # Required: select the intended EOS checkpoint before submission.
-    checkpoint: ${oc.env:AUDIOMC_EOS_CHECKPOINT}
+    checkpoint: /lustre/fsw/nemotron_speech_chat/users/yongqiangw/results/omni_sft/m-exp/m4a/audio-evals/iter_0006000/converted/audio_hf
     cuda_visible_devices: [0, 1, 2, 3, 4, 5, 6, 7]
     tp: 1
     dp: 8
