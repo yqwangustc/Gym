@@ -47,7 +47,14 @@ async def test_fixed_budget_bounded_workers_and_final_export(
         index = int(envelope["task"]["task_id"]["task_id"])
         if index == 3:
             raise ConnectionError("Simulated lost response")
-        result = {"outcome": "teacher_correction_exhausted" if index == 4 else "accepted_correction"}
+        result = {
+            "outcome": "teacher_correction_exhausted"
+            if index == 4
+            else "max_turn_reached_without_failing"
+            if index == 5
+            else "accepted_correction",
+            "accepted": index != 5,
+        }
         row = {"episode_id": envelope["episode_id"], "task_id": envelope["task"]["task_id"], "result": result}
         return SimpleNamespace(ok=True, read=AsyncMock(return_value=json.dumps(row).encode()))
 
@@ -119,7 +126,7 @@ async def test_timed_export_during_unfinished_conversation_is_serialized(
             second_started.set()
             await finish_second.wait()
             second_replied.set()
-        row = {"episode_id": envelope["episode_id"], "result": {"outcome": "accepted_correction"}}
+        row = {"episode_id": envelope["episode_id"], "result": {"outcome": "accepted_correction", "accepted": True}}
         return SimpleNamespace(ok=True, read=AsyncMock(return_value=json.dumps(row).encode()))
 
     @asynccontextmanager
@@ -228,7 +235,7 @@ def test_benchmark_report_uses_counter_deltas_and_separates_outcomes(tmp_path):
     episodes.mkdir(parents=True)
     (tmp_path / "runtime.json").write_text(json.dumps({"collection_seconds": 100, "completed_in_process": 2}))
     (tmp_path / "episode_results.jsonl").write_text(
-        json.dumps({"result": {"outcome": "accepted_correction"}})
+        json.dumps({"result": {"outcome": "accepted_correction", "accepted": True}})
         + "\n"
         + json.dumps({"failure": {"failure_reason": "Timeout"}})
         + "\n"

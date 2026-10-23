@@ -17,7 +17,7 @@ from nemo_gym.config_types import BaseServerConfig
 from nemo_gym.episode_types import EpisodeId, TaskId
 from nemo_gym.server_utils import ServerClient
 from resources_servers.audiomc_sim.app import AudioMCSimConfig, AudioMCSimResources
-from resources_servers.audiomc_sim.common import Prompts, digest, prompt_values
+from resources_servers.audiomc_sim.common import Prompts, assistant_context, digest, prompt_values
 from resources_servers.audiomc_sim.contracts import (
     AudioRef,
     Candidate,
@@ -171,12 +171,12 @@ async def test_teacher_same_prefix_and_persisted_correction(resources, task, mon
                 judgment=failed,
             )
         ],
-        teacher_attempts=[Candidate(text="Monday.", judgment=passed)],
+        teacher_attempts=[Candidate(text="Monday.", judgment=passed, turn_index=0)],
     )
     result = await resources.verify(request, body)
     record = json.loads(Path(result.artifact_path).read_text())
-    assert record["training_example"]["corrected_response"]["text"] == "Monday."
-    assert record["training_example"]["input_prefix"]["turns"] == [m.model_dump() for m in prefix]
+    assert record["training_example"]["turn_evaluations"][-1]["accepted_response"]["text"] == "Monday."
+    assert "assistant_instructions" in record["training_example"]["metadata"]["task"]
     assert record["training_example"]["turn_evaluations"][0]["rubrics"][0]["rubric_id"] == rubrics[0].rubric_id
     assert await resources.verify(request, body) == result
     with pytest.raises(HTTPException, match="another result"):
@@ -234,7 +234,6 @@ def test_prompt_roles_and_no_recursive_rendering(task):
         "blueprint": "Literal {{foo}}",
         "rubrics": "[]",
         "candidate_response": "Answer",
-        "failed_candidates_and_feedback": "[]",
     }
     for directory, roles in roots:
         prompts = Prompts(Path(directory) / "audiomc_sim/prompts", roles)
@@ -245,6 +244,44 @@ def test_prompt_roles_and_no_recursive_rendering(task):
                 assert len(params.input) == 2
                 if role == "user":
                     assert "Literal {{foo}}" in params.input[1].content
+
+
+def test_teacher_prompt_contains_only_student_visible_instructions_and_history(task):
+    task.developer_instructions = "Use concise spoken sentences."
+    history = [
+        Message(turn_id="u0", role="user", text="Use {{this}} literally."),
+        Message(turn_id="a0", role="assistant", text="Earlier accepted reply."),
+        Message(turn_id="u1", role="user", text="Continue from there."),
+    ]
+    context = assistant_context(task, history)
+    assert set(context) == {"assistant_instructions", "conversation_history"}
+    prompts = Prompts(Path("environment_servers/audiomc_sim/prompts"), ("teacher",))
+    request = prompts.request("teacher", context)
+    assert request.input[1].content == (
+        "## Assistant instructions\nBe helpful.\nDeveloper instructions:\nUse concise spoken sentences."
+        "\n\n## Conversation history through the latest user utterance\n"
+        "[user, u0]: Use {{this}} literally.\n[assistant, a0]: Earlier accepted reply."
+        "\n[user, u1]: Continue from there."
+    )
+
+
+@pytest.mark.parametrize("passed", [True, False, None])
+def test_teacher_candidate_keeps_rationale_regardless_of_grade(passed):
+    verdict = (
+        Judgment(grades=[], passed=None)
+        if passed is None
+        else Judgment(grades=[Grade(rubric_id="r", passed=passed, explanation="Grade")], passed=passed)
+    )
+    candidate = Candidate(text="Answer", judgment=verdict, turn_index=0, thinking="Solution rationale")
+    assert candidate.thinking == "Solution rationale"
+
+
+@pytest.mark.parametrize("thinking", ["", "   "])
+def test_thinking_annotation_must_be_nonblank(thinking):
+    passed = Judgment(grades=[Grade(rubric_id="r", passed=True, explanation="Passes")], passed=True)
+    assert Candidate(text="Student answer", judgment=passed, turn_index=0).thinking is None
+    with pytest.raises(ValidationError):
+        Candidate(text="Accepted answer", judgment=passed, turn_index=0, thinking=thinking)
 
 
 def test_judgment_rejects_inconsistent_or_nonboolean_verdicts():
@@ -371,3 +408,183 @@ async def test_saved_task_voice_is_reused_for_different_rollouts(resources, task
         )
         await resources.seed_session(Request({"type": "http", "session": {}}), body)
         assert resources._sessions[body.resources_session_id].voice == "nova"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["student", "teacher", "exhausted", "ungradable"])
+async def test_full_trajectory_repairs_provenance_and_export(resources, task, monkeypatch, ending):
+    import hashlib
+    import io
+    import tarfile
+
+    from pydantic import TypeAdapter
+
+    from resources_servers.audiomc_sim.contracts import SavedTrainingExample
+    from resources_servers.audiomc_sim.export import export_collection
+
+    root = Path(resources.config.artifact_root)
+    resources.config.artifact_root = str(root / "artifacts")
+    Path(resources.config.artifact_root).mkdir()
+    task = task.model_copy(update={"keep_generation_until_max_turn_reached": True, "max_turns": 3})
+    request, _ = await seed(resources, task)
+    monkeypatch.setattr("resources_servers.audiomc_sim.app.infer", AsyncMock(return_value=builder_json()))
+    session = resources._sessions["session"]
+    history, turns, teachers = [], [], []
+    for i in range(3):
+        history.append(Message(turn_id=f"u{i}", role="user", text=f"Request {i}."))
+        rubrics = await resources.build_rubrics(
+            request, StepRequest(resources_session_id="session", turn_index=i, history=history)
+        )
+
+        def judgment(passed):
+            return Judgment(
+                passed=passed,
+                grades=[]
+                if passed is None
+                else [
+                    Grade(rubric_id=rubrics[0].rubric_id, passed=passed, explanation="Checked against frozen prefix.")
+                ],
+            )
+
+        data = f"wave {i}".encode()
+        archive = Path(resources.config.artifact_root) / "audio" / f"turn-{i}.tar"
+        archive.parent.mkdir(exist_ok=True)
+        member = f"episode/user_turn_{i:04d}.wav"
+        with tarfile.open(archive, "w") as tar:
+            entry = tarfile.TarInfo(member)
+            entry.size = len(data)
+            tar.addfile(entry, io.BytesIO(data))
+        audio = AudioRef(
+            archive=f"audio/turn-{i}.tar",
+            member=member,
+            sha256=hashlib.sha256(data).hexdigest(),
+            voice="alloy",
+            model="tts",
+            sample_rate=24000,
+            duration_seconds=1,
+        )
+        session.audio[i] = (history[-1].text, audio)
+        original_passed = i == 1 or (i == 2 and ending == "student")
+        original = f"Original response {i}."
+        original_grade = judgment(original_passed)
+        session.judgments[(i, digest(original))] = original_grade
+        accepted = Candidate(text=original, judgment=original_grade, turn_index=i) if original_passed else None
+        teacher_generated = False
+        if not original_passed:
+            verdicts = (
+                [False, True] if i == 0 or ending == "teacher" else [False, False] if ending == "exhausted" else [None]
+            )
+            for trial, passed in enumerate(verdicts):
+                candidate = Candidate(
+                    text=f"Teacher response {i} trial {trial}.",
+                    judgment=judgment(passed),
+                    turn_index=i,
+                    thinking=f"Visible-context rationale for turn {i}.",
+                )
+                teachers.append(candidate)
+                session.judgments[(i, digest(candidate.text))] = candidate.judgment
+                if passed:
+                    accepted = candidate
+                    teacher_generated = True
+        turns.append(
+            TurnEvaluation(
+                turn_index=i,
+                user_turn_id=f"u{i}",
+                user_text=history[-1].text,
+                audio=audio,
+                rubrics=rubrics,
+                policy_response=original,
+                judgment=original_grade,
+                accepted_response=accepted,
+                generated_by_teacher=teacher_generated,
+            )
+        )
+        if i < 2:
+            history.append(Message(turn_id=f"a{i}", role="assistant", text=accepted.text))
+    outcome = (
+        "accepted_correction"
+        if ending in {"student", "teacher"}
+        else ("teacher_correction_exhausted" if ending == "exhausted" else "ungradable")
+    )
+    body = FinalizeRequest(
+        resources_session_id="session",
+        outcome=outcome,
+        input_prefix=history,
+        turn_evaluations=turns,
+        teacher_attempts=teachers,
+    )
+    forged = body.model_copy(deep=True)
+    forged.turn_evaluations[0].generated_by_teacher = False
+    with pytest.raises(HTTPException, match="provenance"):
+        await resources.verify(request, forged)
+    forged = body.model_copy(deep=True)
+    forged.turn_evaluations[0].accepted_response = forged.turn_evaluations[0].accepted_response.model_copy(
+        update={"text": "An ungraded replacement."}
+    )
+    with pytest.raises(HTTPException, match="verified candidate"):
+        await resources.verify(request, forged)
+    forged = body.model_copy(deep=True)
+    forged.turn_evaluations[0].accepted_response = forged.turn_evaluations[0].accepted_response.model_copy(
+        update={"thinking": "Unmatched rationale."}
+    )
+    with pytest.raises(HTTPException, match="verified candidate"):
+        await resources.verify(request, forged)
+    if outcome == "accepted_correction":
+        premature = body.model_copy(deep=True)
+        premature.turn_evaluations = premature.turn_evaluations[:1]
+        premature.teacher_attempts = [c for c in premature.teacher_attempts if c.turn_index == 0]
+        premature.input_prefix = [Message.model_validate(m) for m in session.prefixes[0]]
+        with pytest.raises(HTTPException, match="max_turns"):
+            await resources.verify(request, premature)
+    result = await resources.verify(request, body)
+    assert await resources.verify(request, body) == result
+    record = json.loads(Path(result.artifact_path).read_text())
+    assert result.turns == 3 and result.teacher_trials == len(teachers)
+    assert record["turn_evaluations"][0]["policy_response"] == "Original response 0."
+    assert record["turn_evaluations"][0]["generated_by_teacher"] is True
+    assert record["turn_evaluations"][1]["generated_by_teacher"] is False
+    assert record["conversation"][1]["text"] == "Teacher response 0 trial 1."
+    assert record["conversation"][1]["generated_by_teacher"] is True
+    assert record["conversation"][1]["thinking"] == "Visible-context rationale for turn 0."
+    assert record["conversation"][3]["generated_by_teacher"] is False
+    assert record["conversation"][3]["thinking"] is None
+    summary = export_collection(root, max_audio_files=1)
+    if outcome == "accepted_correction":
+        assert summary["accepted_examples"] == 1 and summary["accepted_turn_depths"] == {"3": 1}
+        example = json.loads((root / "rollout.jsonl").read_text())
+        TypeAdapter(SavedTrainingExample).validate_python(example)
+        assert example["schema_version"] == "1.7"
+        assert len(example["conversation"]) == 6
+        teacher_replies = [t for t in example["conversation"] if t.get("generated_by_teacher")]
+        expected_indices = [0, 2] if ending == "teacher" else [0]
+        assert [t["turn_id"] for t in teacher_replies] == [f"a{i}" for i in expected_indices]
+        for i in expected_indices:
+            accepted = example["turn_evaluations"][i]["accepted_response"]
+            reply = example["conversation"][2 * i + 1]
+            assert reply["text"] == accepted["text"]
+            assert reply["thinking"] == accepted["thinking"] == f"Visible-context rationale for turn {i}."
+        for i in range(3):
+            assert example["conversation"][2 * i]["audio"] == example["turn_evaluations"][i]["audio"]
+        expected_index = expected_indices[-1]
+        assert example["conversation"][-1]["generated_by_teacher"] is (ending == "teacher")
+        assert len(example["rejected_teacher_attempts"]) == 1
+        assert all(c["turn_index"] == expected_index for c in example["rejected_teacher_attempts"])
+        assert len(example["teacher_attempts"]) == len(teachers)
+    else:
+        assert result.accepted is True
+        assert summary["accepted_examples"] == 1
+        assert summary["accepted_turn_depths"] == {"2": 1}
+        example = json.loads((root / "rollout.jsonl").read_text())
+        TypeAdapter(SavedTrainingExample).validate_python(example)
+        assert len(example["conversation"]) == 4
+        assert len(example["turn_evaluations"]) == 2
+        assert example["conversation"][1]["generated_by_teacher"] is True
+        assert example["metadata"]["termination_outcome"] == outcome
+        assert all(c["turn_index"] < 2 for c in example["teacher_attempts"])
+        assert len(record["turn_evaluations"]) == 3
+        assert json.loads((root / "inspection.jsonl").read_text())["outcome"] == outcome
+        # Recover the same verified prefix from a frozen run without its training projection.
+        record.pop("training_example")
+        Path(result.artifact_path).write_text(json.dumps(record))
+        export_collection(root, max_audio_files=1)
+        assert json.loads((root / "rollout.jsonl").read_text()) == example

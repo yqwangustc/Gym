@@ -14,13 +14,27 @@ See [Resources](../../resources_servers/audiomc_sim/README.md) for routes and sa
 | Roles | Model | Connection |
 | --- | --- | --- |
 | Planner, Rubric Builder, Critiquer | `openai/openai/gpt-6-sol` | NVIDIA inference API |
-| User, Teacher | `gcp/google/gemini-4-argon` | NVIDIA inference API |
+| User, Teacher | `nvidia/zai-org/glm-5.2` | NVIDIA inference API |
 | Assistant | `vllm_local` | Local audio vLLM, port 8000 |
 | TTS | `openai/openai/gpt-4o-mini-tts` | NVIDIA inference API |
 
-All three text/audio assistant connections use Gym's OpenAI-compatible chat adapter.
+Text and audio model connections use Gym's OpenAI-compatible chat adapter.
 Reasoning parsing is enabled; only final assistant text enters the spoken dialogue.
 The default assistant generation budget is 8192 tokens to accommodate its reasoning.
+Teacher returns only the spoken answer as plain text. Gym's model wrapper retains
+native API reasoning separately; AudioMC saves that reasoning in `thinking` for
+every Teacher candidate. The Teacher's only task inputs are assistant instructions
+(including developer instructions, if configured) and conversation history through
+the latest user utterance. It receives no persona, evaluation configuration,
+rubrics, current failed response, prior trial, or grading feedback. Critiquer grades
+only the spoken answer. Retries use identical visible context in fresh requests.
+
+The accepted answer enters later dialogue; native reasoning never enters spoken
+text, grading requests, or subsequent conversation context. Missing reasoning or
+an empty/incomplete answer is a generation failure. Preflight requires the Teacher
+endpoint to return both final text and exposed native reasoning with its configured
+reasoning effort. Start a new output directory when changing these prompts;
+existing collections retain immutable snapshots.
 The speech service must produce mono PCM16 WAV. Streaming WAV headers are supported.
 TTS is assumed faithful; acoustic cues are outside this version's evaluation scope.
 
@@ -38,7 +52,7 @@ user:
   model_name: vllm_local
 teacher:
   api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
-  model_name: gcp/google/gemini-4-argon
+  model_name: nvidia/zai-org/glm-5.2
   api_key: ${oc.env:OPENAI_API_KEY}
 ```
 
@@ -51,6 +65,7 @@ The collector connects to model servers that are already running.
 | --- | --- |
 | `api_base` | Local or remote API base URL; supports `${oc.env:VARIABLE}` and `${oc.env:VARIABLE,default}`. |
 | `model_name` | Model identifier sent to that endpoint. |
+| `reasoning_effort` | Optional text-role API reasoning effort. Teacher examples use `minimal`. Different settings get separate wrappers, even with shared model weights. |
 | `api_key` | Optional authentication value, default `unused`. Use environment references for secrets; each role can use a different credential variable. |
 | `uses_reasoning_parser` | Optional text-model adapter setting, default `true`; configure for the served model's reasoning/final response format. |
 | `checkpoint` | Optional Assistant provenance identifier; does not load or serve a model. |
@@ -82,7 +97,7 @@ process environment variables take precedence. The default remote-role entries u
 `OPENAI_API_BASE` if set, otherwise the NVIDIA endpoint. An entirely local setup with
 omitted/`unused` keys does not require `OPENAI_API_KEY`.
 
-The collector validates all seven role entries before starting a new graph. Identical
+The collector validates the role backend entries before starting a new graph. Identical
 helper settings share one Gym model wrapper. Different role settings get independent
 wrappers; each wrapper consumes a localhost port, not another copy of model weights.
 
@@ -118,11 +133,11 @@ In another terminal, collect five accepted corrections:
   --backend-config environment_servers/audiomc_sim/backend.yaml
 ```
 
-The default is at most 20 rollouts, six exchanges per rollout, three teacher attempts.
+The default is at most 20 rollouts, six exchanges per rollout, five teacher attempts.
 Change endpoints/models per role in `--backend-config`. `--env-file` accepts literal
 exported assignments; it never executes shell code. Only locally hosted model servers
 consume GPU memory. The collector runs native Gym HTTP wrappers on consecutive localhost
-ports starting at 18240; the default shared configuration uses six ports (18240–18245),
+ports starting at 18240; the default shared configuration uses seven ports (18240–18246),
 and six distinct text backends need nine ports. Change `--base-port` if necessary.
 HTTP calls use Gym's pooled aiohttp transport and ServerClient.
 
@@ -254,5 +269,15 @@ so flag resumed measurements before comparing whole-run throughput.
 Use accepted examples per hour alongside failure counts, request latency, generated tokens,
 GPU utilization, and queue/cache measurements. Concurrent conversations spend time in API
 stages; their count differs from the assistant's active vLLM sequence count. Current vLLM
-scheduling capacity is 32 sequences. Provider rate limits must be diagnosed from observed
+scheduling capacity in the local example is 32 sequences per data-parallel rank. Provider rate limits must be diagnosed from observed
 responses; increased API latency alone does not establish a quota.
+
+## Retaining successful rewrites
+
+Any trajectory with a verified Teacher rewrite contributes its contiguous accepted
+conversation prefix to `rollout.jsonl`, even if a later turn exhausts retries or
+becomes ungradable. Generation failures and graceful cancellation also preserve
+earlier verified rewrites when finalization succeeds. The unresolved exchange and
+all failed candidates remain in the episode/inspection record. `result.accepted`
+controls the collection quota independently of `result.outcome`, which records why
+the conversation stopped. Teacher retries default to five per failed turn.

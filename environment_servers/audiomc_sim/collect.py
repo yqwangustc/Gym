@@ -26,6 +26,7 @@ from nemo_gym.server_utils import ServerClient, get_response_json, raise_for_sta
 from resources_servers.audiomc_sim.app import AudioMCSimConfig, AudioMCSimResources
 from resources_servers.audiomc_sim.export import DEFAULT_MAX_AUDIO_FILES, export_collection
 from resources_servers.audiomc_sim.prepare import prepare_tasks
+from resources_servers.audiomc_sim.storage import read_episode_records, recover_export
 from responses_api_agents.simple_agent.app import SimpleAgent, SimpleAgentConfig
 from responses_api_models.vllm_model.app import VLLMModel, VLLMModelConfig
 
@@ -200,6 +201,7 @@ async def serve_graph(graph: dict[str, object]) -> AsyncIterator[ServerClient]:
 async def collect(args: argparse.Namespace) -> None:
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    recover_export(output)
     if args.env_file:
         load_env(args.env_file)
     tasks_path = output / "tasks.jsonl"
@@ -230,6 +232,7 @@ async def collect(args: argparse.Namespace) -> None:
             seed=args.seed,
             max_turns=args.max_turns,
             max_teacher_trials=args.max_teacher_trials,
+            keep_generation_until_max_turn_reached=getattr(args, "keep_generation_until_max_turn_reached", False),
             tts_voices=backends["tts"]["voices"],
         )
         tasks_path.write_text("".join(json.dumps(t, ensure_ascii=False) + "\n" for t in tasks))
@@ -249,8 +252,9 @@ async def collect(args: argparse.Namespace) -> None:
     previous = [json.loads(line) for line in ledger.read_text().splitlines()] if ledger.exists() else []
     completed = {row["episode_id"]["rollout_id"] for row in previous}
     # Finalization is durable before its HTTP reply. Recover lost replies instead of replaying a finished episode.
-    for path in sorted((output / "artifacts" / "episodes").glob("*.json")):
-        record = json.loads(path.read_text())
+    recoverable, raw_sources = read_episode_records(output)
+    for key, record in recoverable.items():
+        path = raw_sources.get(key, output / "episodes.jsonl")
         identity = record["metadata"]["episode_id"]
         if identity["rollout_id"] not in completed:
             row = {
@@ -258,6 +262,7 @@ async def collect(args: argparse.Namespace) -> None:
                 "task_id": record["metadata"]["task_id"],
                 "result": {
                     "outcome": record["outcome"],
+                    "accepted": "training_example" in record,
                     "artifact_path": str(path),
                     "turns": len(record["turn_evaluations"]),
                     "teacher_trials": len(record["teacher_attempts"]),
@@ -268,12 +273,15 @@ async def collect(args: argparse.Namespace) -> None:
                 stream.write(json.dumps(row) + "\n")
             previous.append(row)
             completed.add(identity["rollout_id"])
-    accepted = sum((row.get("result") or {}).get("outcome") == "accepted_correction" for row in previous)
+    accepted = sum(bool((row.get("result") or {}).get("accepted")) for row in previous)
     concurrency = getattr(args, "concurrency", 1)
     fixed_rollouts = getattr(args, "fixed_rollouts", False)
     export_every = getattr(args, "export_every", 0)
     export_interval = getattr(args, "export_every_min", 0) * 60
     max_audio_files = getattr(args, "max_audio_files", DEFAULT_MAX_AUDIO_FILES)
+    export_options = {"max_audio_files": max_audio_files}
+    if getattr(args, "keep_raw_artifacts", False):
+        export_options["cleanup_finished_trajectories"] = False
     if graph:
         configured = graph["environment"]["environment_servers"]["audiomc_sim"]["max_concurrent_episodes"]
         if configured != concurrency:
@@ -315,9 +323,7 @@ async def collect(args: argparse.Namespace) -> None:
             )
             # Cancelling an asyncio waiter does not stop its worker thread. Keep the
             # export lock until publication finishes so deadline export cannot race it.
-            publication = asyncio.create_task(
-                asyncio.to_thread(export_collection, output, max_audio_files=max_audio_files)
-            )
+            publication = asyncio.create_task(asyncio.to_thread(export_collection, output, **export_options))
             cancellation = None
             while not publication.done():
                 try:
@@ -384,7 +390,7 @@ async def collect(args: argparse.Namespace) -> None:
                     with ledger.open("a") as stream:
                         stream.write(json.dumps(row, ensure_ascii=False) + "\n")
                     result = row.get("result") or {}
-                    accepted += result.get("outcome") == "accepted_correction"
+                    accepted += bool(result.get("accepted"))
                     completed_count += 1
                     with (output / "rollout_timings.jsonl").open("a") as stream:
                         stream.write(
@@ -394,6 +400,7 @@ async def collect(args: argparse.Namespace) -> None:
                                     "elapsed_seconds": elapsed,
                                     "finished_at": time(),
                                     "outcome": result.get("outcome", "infrastructure_failure"),
+                                    "accepted": bool(result.get("accepted")),
                                 }
                             )
                             + "\n"
@@ -423,14 +430,13 @@ async def collect(args: argparse.Namespace) -> None:
         collection_seconds = perf_counter() - started
     export_started = perf_counter()
 
-    summary = export_collection(output, max_audio_files=max_audio_files)
+    summary = export_collection(output, **export_options)
     runtime = {
         "concurrency": concurrency,
         "collection_seconds": collection_seconds,
         "export_seconds": perf_counter() - export_started,
         "completed_in_process": completed_count - len(previous),
-        "accepted_in_process": accepted
-        - sum((r.get("result") or {}).get("outcome") == "accepted_correction" for r in previous),
+        "accepted_in_process": accepted - sum(bool((r.get("result") or {}).get("accepted")) for r in previous),
     }
     runtime["rollouts_per_hour"] = runtime["completed_in_process"] * 3600 / max(collection_seconds, 1e-9)
     runtime["accepted_per_hour"] = runtime["accepted_in_process"] * 3600 / max(collection_seconds, 1e-9)
@@ -492,6 +498,12 @@ Resume with the original --concurrency. Stopping and export options still apply.
         help="Local persona JSONL with uuid and general persona fields; scanned once to sample task personas.",
     )
     inputs.add_argument(
+        "--keep-raw-artifacts",
+        action="store_true",
+        help="Keep per-trajectory raw artifacts and request files after successful export. By default, "
+        "completed max-turn trajectories are compacted into exported JSONL/audio; unfinished traces and shared prompts stay.",
+    )
+    inputs.add_argument(
         "--max-audio-files",
         type=int,
         default=DEFAULT_MAX_AUDIO_FILES,
@@ -537,15 +549,21 @@ Resume with the original --concurrency. Stopping and export options still apply.
         "--max-turns",
         type=int,
         default=6,
-        help="Maximum user-assistant exchanges per conversation. Stop at the first graded failure; "
+        help="Maximum user-assistant exchanges per conversation. By default stop at the first graded failure; "
         "exclude conversations that pass all exchanges at this cap. Default: %(default)s.",
+    )
+    collection.add_argument(
+        "--keep-generation-until-max-turn-reached",
+        action="store_true",
+        help="After a failed assistant reply, continue with a rubric-passing teacher correction until max-turns. "
+        "Teacher trials reset each turn; earlier verified rewrites are retained if a later turn fails. Default: disabled.",
     )
     collection.add_argument(
         "--max-teacher-trials",
         type=int,
-        default=3,
-        help="Maximum teacher correction candidates after an assistant failure, each graded against the same "
-        "frozen rubrics. Exclude the attempt if none passes. Default: %(default)s.",
+        default=5,
+        help="Maximum teacher correction candidates per failed assistant turn, each graded against the same "
+        "frozen rubrics. Stop the conversation if none passes; keep any earlier successful rewrites. Default: %(default)s.",
     )
     collection.add_argument(
         "--concurrency",
@@ -606,7 +624,7 @@ Resume with the original --concurrency. Stopping and export options still apply.
         type=int,
         default=18240,
         help="First consecutive localhost port for Gym wrappers, agent, Resources and Environment. "
-        "Needs one port per distinct text backend plus three; default configuration uses six. "
+        "Needs one port per distinct text backend plus three; default configuration uses seven. "
         "The existing assistant endpoint uses a separate port. Default: %(default)s.",
     )
     args = parser.parse_args()

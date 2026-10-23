@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Wire and saved-data contracts for AudioMC simulation."""
 
+from dataclasses import field
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, model_validator
@@ -26,7 +27,8 @@ class TaskInput(StrictModel):
     seed: int
     tts_voice: str | None = Field(default=None, min_length=1, pattern=r"\S")
     max_turns: int = Field(default=6, ge=1)
-    max_teacher_trials: int = Field(default=3, ge=1)
+    max_teacher_trials: int = Field(default=5, ge=1)
+    keep_generation_until_max_turn_reached: bool = False
     assistant_instructions: str
     developer_instructions: str | None = None
     source_hashes: dict[str, str] = Field(default_factory=dict)
@@ -110,6 +112,14 @@ class GradeRequest(StepRequest):
     candidate: str = Field(min_length=1)
 
 
+class Candidate(StrictModel):
+    text: str
+    judgment: Judgment
+    turn_index: int = Field(ge=0)
+    # Teacher's native API reasoning, separate from the spoken answer.
+    thinking: str | None = Field(default=None, min_length=1, pattern=r"\S")
+
+
 class TurnEvaluation(StrictModel):
     turn_index: int
     user_turn_id: str
@@ -118,15 +128,17 @@ class TurnEvaluation(StrictModel):
     rubrics: list[Rubric]
     policy_response: str
     judgment: Judgment
-
-
-class Candidate(StrictModel):
-    text: str
-    judgment: Judgment
+    accepted_response: Candidate | None = None
+    generated_by_teacher: bool = False
 
 
 Outcome = Literal[
-    "accepted_correction", "teacher_correction_exhausted", "max_turn_reached_without_failing", "ungradable"
+    "accepted_correction",
+    "teacher_correction_exhausted",
+    "max_turn_reached_without_failing",
+    "ungradable",
+    "infrastructure_failure",
+    "interrupted",
 ]
 
 
@@ -141,6 +153,7 @@ class FinalizeRequest(StrictModel):
 
 class EpisodeResult(StrictModel):
     outcome: Outcome
+    accepted: bool = False  # Training eligibility is independent of the stop reason.
     artifact_path: str
     turns: int
     teacher_trials: int
@@ -161,15 +174,13 @@ class SeedResponse(ResourcesSeedSessionResponse):
 
 @dataclass(config=ConfigDict(extra="forbid"))
 class SavedTrainingExample:
-    """Accepted teacher replacement with all turn-level evaluations and provenance."""
+    """Accepted trajectory, teacher training targets, and per-turn response provenance."""
 
     example_id: str
     rollout_id: str
-    input_prefix: dict[str, JsonValue]
     turn_evaluations: list[TurnEvaluation]
-    corrected_response: Candidate
     rejected_teacher_attempts: list[Candidate]
     metadata: dict[str, JsonValue]
-    schema_version: str = "1.2"
-    responses_create_params: dict[str, JsonValue] | None = None
-    supervised_target: str | None = None
+    conversation: list[dict[str, JsonValue]] = field(default_factory=list)
+    teacher_attempts: list[Candidate] = field(default_factory=list)
+    schema_version: Literal["1.7"] = "1.7"

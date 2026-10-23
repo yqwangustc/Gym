@@ -36,14 +36,13 @@ def test_export_filters_outcomes_and_reads_audio_with_gym_adapter(tmp_path):
         "metadata": {},
         "turn_evaluations": turns,
         "training_example": {
-            "metadata": {},
-            "input_prefix": {
-                "system_prompt": "Be helpful.",
-                "developer_prompt": None,
-                "turns": [{"turn_id": "u0", "role": "user", "text": "Private transcript"}],
-            },
+            "metadata": {"task": {"assistant_instructions": "Be helpful.", "developer_instructions": None}},
+            "schema_version": "1.7",
             "turn_evaluations": turns,
-            "corrected_response": {"text": "Teacher answer"},
+            "conversation": [
+                {"turn_id": "u0", "role": "user", "text": "Private transcript"},
+                {"turn_id": "a0", "role": "assistant", "text": "Teacher answer", "generated_by_teacher": True},
+            ],
         },
     }
     excluded = {"outcome": "teacher_correction_exhausted", "metadata": {}, "turn_evaluations": turns}
@@ -54,15 +53,11 @@ def test_export_filters_outcomes_and_reads_audio_with_gym_adapter(tmp_path):
     assert summary["rollout_counter"] == 2
     assert summary["audio_members"] == 1
     example = json.loads((tmp_path / "rollout.jsonl").read_text())
-    assert example["input_prefix"]["turns"][0]["audio"]["archive"] == "audio.tar"
     assert example["turn_evaluations"][0]["rubrics"] == [{"rubric_id": "r0"}]
-    assert example["supervised_target"] == "Teacher answer"
-    params = example["responses_create_params"]
-    assert params["input"][-1] == {"role": "user", "content": ""}
-    assert "Private transcript" not in json.dumps(params)
-    refs = json.loads(params["metadata"]["audio_refs"])
-    assert refs == [[{"archive": "audio.tar", "member": "episode/u0.wav"}]]
-    assert TarAudioReader().read_member(tmp_path / "audio.tar", member=refs[0][0]["member"]) == audio
+    assert example["conversation"][-1]["text"] == "Teacher answer"
+    ref = example["conversation"][0]["audio"]
+    assert ref["archive"] == "audio.tar" and ref["member"] == "episode/u0.wav"
+    assert TarAudioReader().read_member(tmp_path / ref["archive"], member=ref["member"]) == audio
     assert json.loads((tmp_path / "inspection.jsonl").read_text())["outcome"] == "teacher_correction_exhausted"
     assert export_collection(tmp_path) == summary
     # A changed source cannot silently produce a seemingly valid training archive.
@@ -107,10 +102,20 @@ def _write_sharding_fixture(root, count):
                     "metadata": {},
                     "turn_evaluations": evaluations,
                     "training_example": {
-                        "metadata": {},
-                        "input_prefix": {"system_prompt": "Be helpful", "developer_prompt": None, "turns": prefix},
+                        "metadata": {"task": {"assistant_instructions": "Be helpful", "developer_instructions": None}},
+                        "schema_version": "1.7",
                         "turn_evaluations": evaluations,
-                        "corrected_response": {"text": "Teacher answer"},
+                        "conversation": [
+                            dict(t, generated_by_teacher=False) if t["role"] == "assistant" else t for t in prefix
+                        ]
+                        + [
+                            {
+                                "turn_id": "answer",
+                                "role": "assistant",
+                                "text": "Teacher answer",
+                                "generated_by_teacher": True,
+                            }
+                        ],
                     },
                 }
             )
@@ -174,7 +179,7 @@ def test_shard_limits_and_all_exported_references(tmp_path, count, limit):
             row = json.loads(line)
             check_refs(row)
             if filename == "rollout.jsonl":
-                check_refs(json.loads(row["responses_create_params"]["metadata"]["audio_refs"]))
+                assert row["schema_version"] == "1.7"
     assert checked == set(payloads)
     assert export_collection(tmp_path, max_audio_files=limit) == summary
 

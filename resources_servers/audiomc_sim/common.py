@@ -50,6 +50,16 @@ class Prompts:
         return {key: hashlib.sha256(text.encode()).hexdigest() for key, text in self.texts.items()}
 
 
+def assistant_context(task: TaskInput, history: list[Message]) -> dict[str, str]:
+    """Only the instructions and visible dialogue available to the assistant."""
+    return {
+        "assistant_instructions": task.assistant_instructions
+        + (f"\nDeveloper instructions:\n{task.developer_instructions}" if task.developer_instructions else ""),
+        "conversation_history": "\n".join(f"[{m.role}, {m.turn_id}]: {m.text}" for m in history)
+        or "(No previous turns)",
+    }
+
+
 def prompt_values(task: TaskInput, history: list[Message], turn_index: int) -> dict[str, object]:
     return {
         "topic": task.topic,
@@ -61,14 +71,10 @@ def prompt_values(task: TaskInput, history: list[Message], turn_index: int) -> d
         "fail_criteria": task.evaluation["fail_criteria"],
         "few_shot_examples": "\n".join(task.evaluation["few_shot_examples"]),
         "evaluation_configuration": json.dumps(task.evaluation, ensure_ascii=False),
-        "assistant_instructions": task.assistant_instructions
-        + (f"\nDeveloper instructions:\n{task.developer_instructions}" if task.developer_instructions else ""),
         "next_turn_index": turn_index,
         "turn_index": turn_index,
         "max_turns": task.max_turns,
-        "conversation_history": "\n".join(f"[{m.role}, {m.turn_id}]: {m.text}" for m in history)
-        or "(No previous turns)",
-    }
+    } | assistant_context(task, history)
 
 
 def response_text(response: NeMoGymResponse) -> str:
@@ -81,8 +87,10 @@ def response_text(response: NeMoGymResponse) -> str:
     ).strip()
 
 
-async def infer(client: ServerClient, model: str, params: NeMoGymResponseCreateParamsNonStreaming) -> str:
-    """Invoke a configured Gym Model Server with an explicit call deadline."""
+async def infer_response(
+    client: ServerClient, model: str, params: NeMoGymResponseCreateParamsNonStreaming
+) -> NeMoGymResponse:
+    """Invoke a model without discarding its separate reasoning output."""
     async with asyncio.timeout(300):
         http = await client.post(server_name=model, url_path="/v1/responses", json=params)
         await raise_for_status(http)
@@ -97,7 +105,30 @@ async def infer(client: ServerClient, model: str, params: NeMoGymResponseCreateP
     text = response_text(response)
     if not text:
         raise ValueError("Model returned no assistant text")
-    return text
+    return response
+
+
+async def infer(client: ServerClient, model: str, params: NeMoGymResponseCreateParamsNonStreaming) -> str:
+    """Return only spoken/final text for roles that do not save reasoning."""
+    return response_text(await infer_response(client, model, params))
+
+
+async def infer_with_reasoning(
+    client: ServerClient, model: str, params: NeMoGymResponseCreateParamsNonStreaming
+) -> tuple[str, str]:
+    """Extract final answer and provider reasoning from Gym's separate output items."""
+    response = await infer_response(client, model, params)
+    parts = []
+    for item in response.output:
+        if item.type == "reasoning":
+            # Gym's Chat adapter stores the provider's native reasoning in summary;
+            # Responses-native backends may instead use reasoning_text content.
+            blocks = item.content or item.summary
+            parts.extend(block.text for block in blocks if block.text.strip())
+    reasoning = "\n".join(parts).strip()
+    if not reasoning:
+        raise ValueError("Teacher returned no native reasoning text")
+    return response_text(response), reasoning
 
 
 def parse_json(text: str) -> object:

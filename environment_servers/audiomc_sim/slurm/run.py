@@ -15,6 +15,7 @@ from environment_servers.audiomc_sim.collect import collect, graph_config
 from environment_servers.audiomc_sim.slurm.config import TaskSettings
 from resources_servers.audiomc_sim.export import export_collection
 from resources_servers.audiomc_sim.prepare import prepare_tasks
+from resources_servers.audiomc_sim.storage import started_attempt_count
 
 
 def prepare_collection(settings: TaskSettings, backends: dict[str, dict[str, object]]) -> None:
@@ -24,7 +25,10 @@ def prepare_collection(settings: TaskSettings, backends: dict[str, dict[str, obj
     snapshot = settings.model_dump(mode="json")
     saved = output / "task_settings.json"
     if (output / "manifest.json").exists():
-        if not saved.exists() or json.loads(saved.read_text()) != snapshot:
+        if (
+            not saved.exists()
+            or TaskSettings.model_validate(json.loads(saved.read_text())).model_dump(mode="json") != snapshot
+        ):
             raise ValueError("Task settings differ from the saved run; use a new output directory")
         prior = OmegaConf.to_container(OmegaConf.load(output / "backend_config.yaml"), resolve=False)
         if prior != backends:
@@ -47,6 +51,7 @@ def prepare_collection(settings: TaskSettings, backends: dict[str, dict[str, obj
         seed=tasks.seed,
         max_turns=tasks.max_turns,
         max_teacher_trials=tasks.max_teacher_trials,
+        keep_generation_until_max_turn_reached=tasks.keep_generation_until_max_turn_reached,
         tts_voices=backends["tts"]["voices"],
     )
     (output / "tasks.jsonl").write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
@@ -96,6 +101,7 @@ async def run_collection(
                     export_every_min=tasks.export_every_min,
                     max_audio_files=tasks.max_audio_files,
                     monitor=True,
+                    keep_raw_artifacts=not tasks.cleanup_finished_trajectories,
                 )
             )
             completed_normally = True
@@ -117,9 +123,12 @@ async def run_collection(
             summary = json.loads((settings.output / "summary.json").read_text())
         else:
             summary = await asyncio.to_thread(
-                export_collection, settings.output, max_audio_files=tasks.max_audio_files
+                export_collection,
+                settings.output,
+                max_audio_files=tasks.max_audio_files,
+                cleanup_finished_trajectories=tasks.cleanup_finished_trajectories,
             )
-        started_rollouts = len(list((settings.output / "requests").glob("*.json")))
+        started_rollouts = started_attempt_count(settings.output)
         runtime = {
             "concurrency": tasks.concurrency,
             "target_trajectory": tasks.target_trajectory,

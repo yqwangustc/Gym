@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Environment-owned multi-turn generation and teacher correction protocol."""
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -20,7 +21,14 @@ from nemo_gym.config_types import (
 )
 from nemo_gym.openai_utils import NeMoGymResponse, NeMoGymResponseCreateParamsNonStreaming
 from nemo_gym.server_utils import get_response_json, raise_for_status
-from resources_servers.audiomc_sim.common import Prompts, infer, prompt_values, response_text
+from resources_servers.audiomc_sim.common import (
+    Prompts,
+    assistant_context,
+    infer,
+    infer_with_reasoning,
+    prompt_values,
+    response_text,
+)
 from resources_servers.audiomc_sim.contracts import (
     AudioRef,
     Candidate,
@@ -162,6 +170,14 @@ class AudioMCSimEnvironment(BaseEnvironmentServer[EpisodeRequest, EpisodeRespons
             invocations.append({"role": role, "model_server": model, "text": text})
             return text
 
+        async def teacher_candidate(values: dict[str, object]) -> tuple[str, str]:
+            model = self.config.model_for("teacher").name
+            params = self._prompts.request("teacher", values)
+            with trace_call(invocations, "teacher", model_server=model, turn_index=values["turn_index"]):
+                answer, thinking = await infer_with_reasoning(self.server_client, model, params)
+            invocations.append({"role": "teacher", "model_server": model, "text": answer, "thinking": thinking})
+            return answer, thinking
+
         async def grade(text: str, index: int) -> Judgment:
             return Judgment.model_validate(
                 await post_resources(
@@ -175,7 +191,11 @@ class AudioMCSimEnvironment(BaseEnvironmentServer[EpisodeRequest, EpisodeRespons
                 )
             )
 
+        finalizing = False
+
         async def finish(outcome: Outcome) -> EpisodeResponse:
+            nonlocal finalizing
+            finalizing = True
             invocations.append({"role": "prompt_manifest", "hashes": self._prompts.hashes()})
             body = FinalizeRequest(
                 resources_session_id=resource_session,
@@ -188,108 +208,139 @@ class AudioMCSimEnvironment(BaseEnvironmentServer[EpisodeRequest, EpisodeRespons
             result = EpisodeResult.model_validate(await post_resources("/verify", body.model_dump(mode="json")))
             return EpisodeResponse(episode_id=request.episode_id, task_id=request.task.task_id, result=result)
 
-        for index in range(task.max_turns):
-            values = prompt_values(task, history, index)
-            blueprint = await helper("planner", values)
-            user_text = await helper("user", values | {"blueprint": blueprint})
-            history.append(Message(turn_id=f"u{index}", role="user", text=user_text))
-            rubrics = [
-                Rubric.model_validate(r)
-                for r in await post_resources(
-                    "/build_rubrics",
-                    {
-                        "resources_session_id": resource_session,
-                        "turn_index": index,
-                        "history": [m.model_dump() for m in history],
-                    },
-                )
-            ]
-            if not rubrics:
-                return await finish("ungradable")
-            audio = AudioRef.model_validate(
-                await post_resources(
-                    "/synthesize",
-                    {
-                        "resources_session_id": resource_session,
-                        "turn_index": index,
-                        "text": user_text,
-                    },
-                )
-            )
-            audios.append(audio)
-            assistant_history.append({"role": "user", "content": ""})
-            inputs = [{"role": "system", "content": task.assistant_instructions}]
-            if task.developer_instructions:
-                inputs.append({"role": "developer", "content": task.developer_instructions})
-            params = NeMoGymResponseCreateParamsNonStreaming(
-                input=inputs + assistant_history,
-                max_output_tokens=self.config.assistant_max_tokens,
-                metadata={"audio_refs": json.dumps([[{"archive": a.archive, "member": a.member}] for a in audios])},
-            )
-            with trace_call(
-                invocations, "assistant", model_server=self.config.assistant_agent.name, turn_index=index
-            ) as timing:
-                response = await self.server_client.post(
-                    server_name=self.config.assistant_agent.name,
-                    url_path="/v1/responses",
-                    json=params,
-                    cookies=assistant_cookies,
-                )
-                await raise_for_status(response)
-                raw = await get_response_json(response)
-                raw.pop("_ng_trajectory", None)
-                candidate = NeMoGymResponse.model_validate(raw)
-                assistant_cookies.update({key: morsel.value for key, morsel in response.cookies.items()})
-                text = response_text(candidate)
-                if candidate.status != "completed" or not text:
-                    raise ValueError("Assistant returned incomplete or empty text")
-                if candidate.usage is not None:
-                    timing["usage"] = candidate.usage.model_dump(mode="json")
-            invocations.append(
-                {
-                    "role": "assistant",
-                    "model_server": self.config.assistant_agent.name,
-                    "response_id": candidate.id,
-                    "text": text,
-                }
-            )
-            judgment = await grade(text, index)
-            evaluations.append(
-                TurnEvaluation(
-                    turn_index=index,
-                    user_turn_id=f"u{index}",
-                    user_text=user_text,
-                    audio=audio,
-                    rubrics=rubrics,
-                    policy_response=text,
-                    judgment=judgment,
-                )
-            )
-            if judgment.passed is None:
-                return await finish("ungradable")
-            if judgment.passed:
-                # On the final allowed exchange keep the input prefix before this response for storage.
-                if index == task.max_turns - 1:
-                    return await finish("max_turn_reached_without_failing")
-                history.append(Message(turn_id=f"a{index}", role="assistant", text=text))
-                assistant_history.append({"role": "assistant", "content": text})
-                continue
-            feedback = [{"text": text, "judgment": judgment.model_dump()}]
-            for _ in range(task.max_teacher_trials):
-                values = prompt_values(task, history, index) | {
-                    "rubrics": json.dumps([r.model_dump() for r in rubrics]),
-                    "failed_candidates_and_feedback": json.dumps(feedback, ensure_ascii=False),
-                }
-                corrected = await helper("teacher", values)
-                corrected_grade = await grade(corrected, index)
-                teacher_attempts.append(Candidate(text=corrected, judgment=corrected_grade))
-                if corrected_grade.passed is None:
+        async def generate() -> EpisodeResponse:
+            for index in range(task.max_turns):
+                values = prompt_values(task, history, index)
+                blueprint = await helper("planner", values)
+                user_text = await helper("user", values | {"blueprint": blueprint})
+                history.append(Message(turn_id=f"u{index}", role="user", text=user_text))
+                rubrics = [
+                    Rubric.model_validate(r)
+                    for r in await post_resources(
+                        "/build_rubrics",
+                        {
+                            "resources_session_id": resource_session,
+                            "turn_index": index,
+                            "history": [m.model_dump() for m in history],
+                        },
+                    )
+                ]
+                if not rubrics:
                     return await finish("ungradable")
-                if corrected_grade.passed:
-                    return await finish("accepted_correction")
-                feedback.append({"text": corrected, "judgment": corrected_grade.model_dump()})
-            return await finish("teacher_correction_exhausted")
-        raise AssertionError("Nonempty turn budget must terminate")
+                audio = AudioRef.model_validate(
+                    await post_resources(
+                        "/synthesize",
+                        {
+                            "resources_session_id": resource_session,
+                            "turn_index": index,
+                            "text": user_text,
+                        },
+                    )
+                )
+                audios.append(audio)
+                assistant_history.append({"role": "user", "content": ""})
+                inputs = [{"role": "system", "content": task.assistant_instructions}]
+                if task.developer_instructions:
+                    inputs.append({"role": "developer", "content": task.developer_instructions})
+                params = NeMoGymResponseCreateParamsNonStreaming(
+                    input=inputs + assistant_history,
+                    max_output_tokens=self.config.assistant_max_tokens,
+                    metadata={
+                        "audio_refs": json.dumps([[{"archive": a.archive, "member": a.member}] for a in audios])
+                    },
+                )
+                with trace_call(
+                    invocations, "assistant", model_server=self.config.assistant_agent.name, turn_index=index
+                ) as timing:
+                    response = await self.server_client.post(
+                        server_name=self.config.assistant_agent.name,
+                        url_path="/v1/responses",
+                        json=params,
+                        cookies=assistant_cookies,
+                    )
+                    await raise_for_status(response)
+                    raw = await get_response_json(response)
+                    raw.pop("_ng_trajectory", None)
+                    candidate = NeMoGymResponse.model_validate(raw)
+                    assistant_cookies.update({key: morsel.value for key, morsel in response.cookies.items()})
+                    text = response_text(candidate)
+                    if candidate.status != "completed" or not text:
+                        raise ValueError("Assistant returned incomplete or empty text")
+                    if candidate.usage is not None:
+                        timing["usage"] = candidate.usage.model_dump(mode="json")
+                invocations.append(
+                    {
+                        "role": "assistant",
+                        "model_server": self.config.assistant_agent.name,
+                        "response_id": candidate.id,
+                        "text": text,
+                    }
+                )
+                judgment = await grade(text, index)
+                evaluations.append(
+                    TurnEvaluation(
+                        turn_index=index,
+                        user_turn_id=f"u{index}",
+                        user_text=user_text,
+                        audio=audio,
+                        rubrics=rubrics,
+                        policy_response=text,
+                        judgment=judgment,
+                    )
+                )
+                if judgment.passed is None:
+                    return await finish("ungradable")
+                if judgment.passed:
+                    evaluations[-1].accepted_response = Candidate(text=text, judgment=judgment, turn_index=index)
+                    # Finalization verifies the frozen prefix ending with the latest user turn.
+                    if index == task.max_turns - 1:
+                        outcome = "accepted_correction" if teacher_attempts else "max_turn_reached_without_failing"
+                        return await finish(outcome)
+                    history.append(Message(turn_id=f"a{index}", role="assistant", text=text))
+                    assistant_history.append({"role": "assistant", "content": text})
+                    continue
+                # Freeze exactly the student-visible context. Every retry is a fresh
+                # request with no current failed answer, rubrics or critique feedback.
+                teacher_values = assistant_context(task, history) | {"turn_index": index}
+                for _ in range(task.max_teacher_trials):
+                    corrected, thinking = await teacher_candidate(teacher_values)
+                    corrected_grade = await grade(corrected, index)
+                    teacher_attempts.append(
+                        Candidate(
+                            text=corrected,
+                            thinking=thinking,
+                            judgment=corrected_grade,
+                            turn_index=index,
+                        )
+                    )
+                    if corrected_grade.passed is None:
+                        return await finish("ungradable")
+                    if corrected_grade.passed:
+                        evaluations[-1].accepted_response = teacher_attempts[-1]
+                        evaluations[-1].generated_by_teacher = True
+                        if not task.keep_generation_until_max_turn_reached or index == task.max_turns - 1:
+                            return await finish("accepted_correction")
+                        history.append(Message(turn_id=f"a{index}", role="assistant", text=corrected))
+                        assistant_history.append({"role": "assistant", "content": corrected})
+                        break
+                else:
+                    return await finish("teacher_correction_exhausted")
+            raise AssertionError("Nonempty turn budget must terminate")
+
+        try:
+            return await generate()
+        except (Exception, asyncio.CancelledError) as error:
+            if finalizing or not any(turn.generated_by_teacher for turn in evaluations):
+                raise
+            # Preserve earlier verified repairs without treating this failure as
+            # a valid answer or as a rubric failure on the unresolved exchange.
+            invocations.append(
+                {"role": "termination_error", "error_type": type(error).__name__, "error": str(error)[:2000]}
+            )
+            if isinstance(error, asyncio.CancelledError):
+                await asyncio.shield(finish("interrupted"))
+                raise
+            return await finish("infrastructure_failure")
 
 
 if __name__ == "__main__":

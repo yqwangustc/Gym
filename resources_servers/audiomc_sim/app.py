@@ -28,6 +28,7 @@ from resources_servers.audiomc_sim.common import Prompts, digest, infer, parse_j
 from resources_servers.audiomc_sim.contracts import (
     AudioRef,
     BuilderOutput,
+    Candidate,
     EpisodeResult,
     FinalizeRequest,
     GradeRequest,
@@ -40,6 +41,7 @@ from resources_servers.audiomc_sim.contracts import (
     TaskInput,
     TraceRequest,
 )
+from resources_servers.audiomc_sim.projection import project_training_example
 from resources_servers.audiomc_sim.speech import synthesize_bytes
 from resources_servers.audiomc_sim.telemetry import trace_call
 
@@ -337,9 +339,29 @@ class AudioMCSimResources(SimpleResourcesServer):
                 if previous != signature:
                     raise HTTPException(409, "Episode already finalized with another result")
                 return result
-            turns = body.turn_evaluations
+            # Derive verified response provenance on copies to keep finalization idempotent.
+            turns = [turn.model_copy(deep=True) for turn in body.turn_evaluations]
             if [t.turn_index for t in turns] != list(range(len(turns))):
                 raise HTTPException(422, "Every completed exchange must be evaluated in order")
+            if len(turns) > session.task.max_turns:
+                raise HTTPException(422, "Configured episode limits exceeded")
+            teacher_attempts = []
+            by_turn: dict[int, list[Candidate]] = {}
+            for candidate in body.teacher_attempts:
+                i = candidate.turn_index
+                if not 0 <= i < len(turns) or turns[i].judgment.passed is not False:
+                    raise HTTPException(422, "Teacher candidates require a failed original response")
+                if candidate.judgment != session.judgments.get((i, digest(candidate.text))):
+                    raise HTTPException(422, "Unverified teacher candidate")
+                teacher_attempts.append(candidate)
+                by_turn.setdefault(i, []).append(candidate)
+            if [c.turn_index for c in teacher_attempts] != sorted(c.turn_index for c in teacher_attempts):
+                raise HTTPException(422, "Teacher attempts must follow turn order")
+            for candidates in by_turn.values():
+                if len(candidates) > session.task.max_teacher_trials:
+                    raise HTTPException(422, "Configured per-turn teacher limits exceeded")
+                if any(c.judgment.passed is not False for c in candidates[:-1]):
+                    raise HTTPException(422, "Teacher loop must stop at first acceptance or ungradable candidate")
             for turn in turns:
                 i = turn.turn_index
                 prefix = session.prefixes.get(i)
@@ -349,55 +371,92 @@ class AudioMCSimResources(SimpleResourcesServer):
                     raise HTTPException(422, "Turn evidence differs from stored Resources records")
                 if turn.judgment != session.judgments.get((i, digest(turn.policy_response))):
                     raise HTTPException(422, "Turn grades differ from stored candidate grades")
+                candidates = by_turn.get(i, [])
+                accepted = None
+                teacher_generated = False
+                if turn.judgment.passed is True:
+                    accepted = Candidate(text=turn.policy_response, judgment=turn.judgment, turn_index=i)
+                elif candidates and candidates[-1].judgment.passed is True:
+                    accepted = candidates[-1]
+                    teacher_generated = True
+                if turn.accepted_response is not None:
+                    supplied = turn.accepted_response
+                    if (
+                        accepted is None
+                        or supplied.text != accepted.text
+                        or supplied.judgment != accepted.judgment
+                        or supplied.thinking != accepted.thinking
+                        or supplied.turn_index != i
+                    ):
+                        raise HTTPException(422, "Accepted response differs from verified candidate")
+                if (turn.accepted_response is not None or turn.generated_by_teacher) and (
+                    turn.generated_by_teacher != teacher_generated
+                ):
+                    raise HTTPException(422, "Assistant response provenance differs from verified source")
+                turn.accepted_response = accepted
+                turn.generated_by_teacher = teacher_generated
                 if i < len(turns) - 1:
+                    if not session.task.keep_generation_until_max_turn_reached and turn.judgment.passed is not True:
+                        raise HTTPException(422, "Conversation must stop at first failure")
                     next_prefix = session.prefixes.get(i + 1, [])
-                    if not next_prefix or next_prefix[-2]["text"] != turn.policy_response:
-                        raise HTTPException(422, "Intermediate response differs from conversation history")
-                if i < len(turns) - 1 and turn.judgment.passed is not True:
-                    raise HTTPException(422, "Conversation must stop at first failure")
-            if len(turns) > session.task.max_turns or len(body.teacher_attempts) > session.task.max_teacher_trials:
-                raise HTTPException(422, "Configured episode limits exceeded")
+                    if not accepted or not next_prefix or next_prefix[-2]["text"] != accepted.text:
+                        raise HTTPException(422, "Intermediate response differs from accepted conversation history")
             if body.outcome == "ungradable" and len(session.prefixes) == len(turns) + 1:
                 if (
                     session.rubrics.get(len(turns))
                     or [m.model_dump() for m in body.input_prefix] != session.prefixes[len(turns)]
                 ):
                     raise HTTPException(422, "Ungradable setup must have empty frozen rubrics")
-            elif turns:
-                last = turns[-1]
-                if [m.model_dump() for m in body.input_prefix] != session.prefixes[last.turn_index]:
+            elif turns and body.outcome not in {"infrastructure_failure", "interrupted"}:
+                if [m.model_dump() for m in body.input_prefix] != session.prefixes[turns[-1].turn_index]:
                     raise HTTPException(422, "Final prefix differs from frozen history")
-                for candidate in body.teacher_attempts:
-                    if candidate.judgment != session.judgments.get((last.turn_index, digest(candidate.text))):
-                        raise HTTPException(422, "Unverified teacher candidate")
-            if body.teacher_attempts and (not turns or turns[-1].judgment.passed is not False):
-                raise HTTPException(422, "Teacher candidates require a failed original response")
             if body.outcome == "accepted_correction":
-                if not turns or turns[-1].judgment.passed is not False or not body.teacher_attempts:
-                    raise HTTPException(422, "Accepted example requires a failed original and a teacher correction")
-                if body.teacher_attempts[-1].judgment.passed is not True:
-                    raise HTTPException(422, "Correction must pass all rubrics")
-            if any(c.judgment.passed is not False for c in body.teacher_attempts[:-1]):
-                raise HTTPException(422, "Teacher loop must stop at first acceptance or ungradable candidate")
+                if not teacher_attempts or not all(t.accepted_response is not None for t in turns):
+                    raise HTTPException(
+                        422, "Accepted example requires verified teacher corrections and accepted replies"
+                    )
+                if session.task.keep_generation_until_max_turn_reached:
+                    if len(turns) != session.task.max_turns:
+                        raise HTTPException(
+                            422, "Continuation mode must reach max_turns before accepting the trajectory"
+                        )
+                elif not turns or turns[-1].judgment.passed is not False:
+                    raise HTTPException(422, "Accepted example requires a failed final original response")
             if body.outcome == "max_turn_reached_without_failing":
                 if len(turns) != session.task.max_turns or any(t.judgment.passed is not True for t in turns):
                     raise HTTPException(422, "Turn-limit result requires all allowed turns to pass")
-                if body.teacher_attempts:
+                if teacher_attempts:
                     raise HTTPException(422, "Successful rollout cannot have teacher attempts")
+            last_candidates = by_turn.get(len(turns) - 1, [])
             if body.outcome == "teacher_correction_exhausted":
                 if (
                     not turns
                     or turns[-1].judgment.passed is not False
-                    or len(body.teacher_attempts) != session.task.max_teacher_trials
-                    or any(c.judgment.passed is not False for c in body.teacher_attempts)
+                    or len(last_candidates) != session.task.max_teacher_trials
+                    or any(c.judgment.passed is not False for c in last_candidates)
                 ):
-                    raise HTTPException(422, "Exhaustion requires all allowed teacher candidates to fail")
+                    raise HTTPException(
+                        422, "Exhaustion requires all allowed teacher candidates on the final turn to fail"
+                    )
             if body.outcome == "ungradable":
                 empty_builder = len(session.prefixes) == len(turns) + 1 and not session.rubrics.get(len(turns))
                 null_grade = bool(turns) and turns[-1].judgment.passed is None
-                null_teacher = bool(body.teacher_attempts) and body.teacher_attempts[-1].judgment.passed is None
+                null_teacher = bool(last_candidates) and last_candidates[-1].judgment.passed is None
                 if not (empty_builder or null_grade or null_teacher):
                     raise HTTPException(422, "Ungradable outcome requires an ungradable builder or grade")
+            conversation = []
+            for turn in turns:
+                conversation.append({"turn_id": turn.user_turn_id, "role": "user", "text": turn.user_text})
+                if turn.accepted_response is not None:
+                    conversation.append(
+                        {
+                            "turn_id": f"a{turn.turn_index}",
+                            "role": "assistant",
+                            "text": turn.accepted_response.text,
+                            "generated_by_teacher": turn.generated_by_teacher,
+                            "thinking": turn.accepted_response.thinking,
+                        }
+                    )
             metadata = {
                 "task": session.task.model_dump(),
                 "episode_id": session.episode_identity,
@@ -405,21 +464,22 @@ class AudioMCSimResources(SimpleResourcesServer):
                 "resource_prompt_hashes": self._prompts.hashes(),
                 "tts_voice": session.voice,
             }
-            record = body.model_dump(mode="json") | {"metadata": metadata, "resource_invocations": session.invocations}
-            if body.outcome == "accepted_correction":
-                example = SavedTrainingExample(
-                    example_id=session.episode,
-                    rollout_id=session.episode_identity["rollout_id"],
-                    input_prefix={
-                        "system_prompt": session.task.assistant_instructions,
-                        "developer_prompt": session.task.developer_instructions,
-                        "turns": [m.model_dump() for m in body.input_prefix],
-                    },
-                    turn_evaluations=turns,
-                    corrected_response=body.teacher_attempts[-1],
-                    rejected_teacher_attempts=body.teacher_attempts[:-1],
-                    metadata=metadata,
-                )
+            record = body.model_dump(mode="json") | {
+                "metadata": metadata,
+                "resource_invocations": session.invocations,
+                "turn_evaluations": [t.model_dump(mode="json") for t in turns],
+                "teacher_attempts": [c.model_dump(mode="json") for c in teacher_attempts],
+                "conversation": conversation,
+            }
+            example = project_training_example(
+                example_id=session.episode,
+                rollout_id=session.episode_identity["rollout_id"],
+                turns=turns,
+                teacher_attempts=teacher_attempts,
+                metadata=metadata,
+                termination_outcome=body.outcome,
+            )
+            if example is not None:
                 record["training_example"] = TypeAdapter(SavedTrainingExample).dump_python(example, mode="json")
             target = Path(self.config.artifact_root) / "episodes" / f"{session.episode}.json"
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -428,6 +488,7 @@ class AudioMCSimResources(SimpleResourcesServer):
             temp.replace(target)
             result = EpisodeResult(
                 outcome=body.outcome,
+                accepted=example is not None,
                 artifact_path=str(target),
                 turns=len(turns),
                 teacher_trials=len(body.teacher_attempts),
@@ -442,7 +503,13 @@ class AudioMCSimResources(SimpleResourcesServer):
             outcome = result.get("outcome")
             if outcome:
                 counts[outcome] = counts.get(outcome, 0) + 1
-        return AggregateMetrics(agent_metrics={"completed_rollouts": sum(counts.values()), **counts})
+        return AggregateMetrics(
+            agent_metrics={
+                "completed_rollouts": sum(counts.values()),
+                "accepted_examples": sum(bool(result.get("accepted")) for result in body.verify_responses),
+                **counts,
+            }
+        )
 
 
 if __name__ == "__main__":

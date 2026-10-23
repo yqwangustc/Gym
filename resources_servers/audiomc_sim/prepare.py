@@ -30,6 +30,7 @@ def prepare_tasks(
     max_turns: int,
     max_teacher_trials: int,
     tts_voices: list[str] | None = None,
+    keep_generation_until_max_turn_reached: bool = False,
 ) -> list[dict[str, object]]:
     """Use compact byte offsets to sample the entire corpus without retaining all rows."""
     if count < 1:
@@ -86,6 +87,7 @@ def prepare_tasks(
                 tts_voice=voice_rng.choice(voices),
                 max_turns=max_turns,
                 max_teacher_trials=max_teacher_trials,
+                keep_generation_until_max_turn_reached=keep_generation_until_max_turn_reached,
                 assistant_instructions=assistant_prompt,
                 source_hashes=hashes,
             )
@@ -113,7 +115,12 @@ def main() -> None:
     parser.add_argument("--count", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-turns", type=int, default=6)
-    parser.add_argument("--max-teacher-trials", type=int, default=3)
+    parser.add_argument("--max-teacher-trials", type=int, default=5)
+    parser.add_argument(
+        "--keep-generation-until-max-turn-reached",
+        action="store_true",
+        help="Continue with accepted teacher replies until max-turns; discard if any repair exhausts retries.",
+    )
     args = parser.parse_args()
     tasks = prepare_tasks(
         persona_path=args.personas,
@@ -124,6 +131,7 @@ def main() -> None:
         seed=args.seed,
         max_turns=args.max_turns,
         max_teacher_trials=args.max_teacher_trials,
+        keep_generation_until_max_turn_reached=args.keep_generation_until_max_turn_reached,
         tts_voices=load_backends(args.backend_config)["tts"]["voices"],
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

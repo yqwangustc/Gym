@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Exercise orchestration outcomes and role visibility without external models."""
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -48,17 +49,34 @@ def http_response(data: object, cookie: str = "cookie") -> SimpleNamespace:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "verdicts,outcome,assistant_calls,teacher_calls",
+    "keep_generating,verdicts,outcome,assistant_calls,teacher_calls",
     [
-        ([True, False, False, True], "accepted_correction", 2, 2),
-        ([True, True], "max_turn_reached_without_failing", 2, 0),
-        ([False, False, False], "teacher_correction_exhausted", 1, 2),
-        ([None], "ungradable", 1, 0),
+        (False, [True, False, False, True], "accepted_correction", 2, 2),
+        (False, [True, True], "max_turn_reached_without_failing", 2, 0),
+        (False, [False, False, False], "teacher_correction_exhausted", 1, 2),
+        (False, [None], "ungradable", 1, 0),
+        (True, [False, True, True], "accepted_correction", 2, 1),
+        (True, [False, False, True, False, False, True], "accepted_correction", 2, 4),
+        (True, [False, True, False, False, False], "teacher_correction_exhausted", 2, 3),
+        (True, [True, True], "max_turn_reached_without_failing", 2, 0),
+        (True, [False, True, None], "ungradable", 2, 1),
+        (True, [False, True, False, None], "ungradable", 2, 2),
     ],
 )
 @pytest.mark.parametrize("separate_backends", [False, True])
+@pytest.mark.parametrize(
+    "teacher_output",
+    [
+        "valid",
+        "inference_failure",
+        "missing_reasoning",
+        "late_teacher_failure",
+        "late_assistant_failure",
+        "late_cancellation",
+    ],
+)
 async def test_loop_outcomes_and_audio_only_prefix(
-    monkeypatch, verdicts, outcome, assistant_calls, teacher_calls, separate_backends
+    monkeypatch, keep_generating, verdicts, outcome, assistant_calls, teacher_calls, separate_backends, teacher_output
 ):
     client = ServerClient(
         head_server_config=BaseServerConfig(host="localhost", port=1), global_config_dict=OmegaConf.create({})
@@ -103,6 +121,7 @@ async def test_loop_outcomes_and_audio_only_prefix(
         subtopic_description="Spoken updates",
         max_turns=2,
         max_teacher_trials=2,
+        keep_generation_until_max_turn_reached=keep_generating,
         assistant_instructions="Be helpful.",
     )
     request = EpisodeRequest.model_validate(
@@ -114,6 +133,8 @@ async def test_loop_outcomes_and_audio_only_prefix(
     calls, helper_calls, saved = [], [], []
     judgments = iter(verdicts)
     current_turn = 0
+    saved_teacher_turns = []
+    teacher_inputs = {}
 
     async def infer(client, model, params):
         system = params.input[0].content
@@ -125,11 +146,39 @@ async def test_loop_outcomes_and_audio_only_prefix(
         if "You are the User Agent" in system:
             assert model == ("local_user" if separate_backends else "user_teacher")
             return "Spoken request."
+        raise AssertionError("Teacher must use the reasoning-preserving inference helper")
+
+    async def infer_with_reasoning(client, model, params):
+        system = params.input[0].content
+        perturn = params.input[1].content
+        helper_calls.append((system, perturn))
         assert model == ("remote_teacher" if separate_backends else "user_teacher")
         assert "You are the Teacher" in system
-        assert "Frozen turn-level rubrics" in perturn
-        assert "wrong answer" in perturn
-        return "Corrected answer."
+        assert "Spoken request." in perturn and "Be helpful." in perturn
+        # Earlier accepted student text remains visible; the current failed
+        # response, previous Teacher trials and private grading material do not.
+        assert perturn.count("wrong answer") == current_turn - sum(t < current_turn for t in saved_teacher_turns)
+        for hidden in (
+            "Required behavior",
+            "Private biography",
+            "Apply edits",
+            "private blueprint",
+            "Frozen turn-level rubrics",
+            "Previous failed candidates",
+            "Evaluation configuration",
+            "Rationale based only on the visible request.",
+        ):
+            assert hidden not in perturn
+        if current_turn in teacher_inputs:
+            assert params.input == teacher_inputs[current_turn]  # Retries receive identical context.
+        teacher_inputs[current_turn] = params.input
+        if teacher_output == "late_teacher_failure" and current_turn > 0:
+            raise ValueError("Later Teacher inference failed")
+        if teacher_output == "inference_failure":
+            raise ValueError("Teacher inference failed")
+        if teacher_output == "missing_reasoning":
+            raise ValueError("Teacher returned no native reasoning text")
+        return "Corrected answer.", "Rationale based only on the visible request."
 
     async def post(self, *, server_name, url_path, json, **kwargs):
         nonlocal current_turn
@@ -162,7 +211,12 @@ async def test_loop_outcomes_and_audio_only_prefix(
                 }
             )
         if url_path == "/v1/responses":
+            if teacher_output == "late_assistant_failure" and current_turn > 0:
+                raise ValueError("Later Assistant inference failed")
+            if teacher_output == "late_cancellation" and current_turn > 0:
+                raise asyncio.CancelledError()
             assert server_name == "assistant"
+            assert "Rationale based only" not in str(data)
             assert data["input"][0] == {"role": "system", "content": "Be helpful."}
             users = [m for m in data["input"] if m["role"] == "user"]
             assert len(users) == current_turn + 1
@@ -176,12 +230,18 @@ async def test_loop_outcomes_and_audio_only_prefix(
                     "private blueprint",
                     "Required behavior",
                     "Spoken request",
-                    "Corrected answer",
                 ]
             )
+            previous = [m["content"] for m in data["input"] if m["role"] == "assistant"]
+            if previous and saved_teacher_turns:
+                assert keep_generating and previous[-1] == "Corrected answer."
             return http_response(response_json("wrong answer"))
         if url_path == "/grade":
+            assert data["candidate"] in {"wrong answer", "Corrected answer."}
+            assert "Rationale based only" not in str(data)
             passed = next(judgments)
+            if data["candidate"] == "Corrected answer." and passed:
+                saved_teacher_turns.append(current_turn)
             assert data["history"][-1]["role"] == "user"
             return http_response(
                 {
@@ -197,6 +257,7 @@ async def test_loop_outcomes_and_audio_only_prefix(
             return http_response(
                 {
                     "outcome": final.outcome,
+                    "accepted": any(t.generated_by_teacher for t in final.turn_evaluations),
                     "artifact_path": "episode.json",
                     "turns": len(final.turn_evaluations),
                     "teacher_trials": len(final.teacher_attempts),
@@ -206,8 +267,34 @@ async def test_loop_outcomes_and_audio_only_prefix(
         return http_response({})
 
     monkeypatch.setattr("environment_servers.audiomc_sim.app.infer", infer)
+    monkeypatch.setattr("environment_servers.audiomc_sim.app.infer_with_reasoning", infer_with_reasoning)
     monkeypatch.setattr(ServerClient, "post", post)
+    if teacher_output == "late_cancellation" and assistant_calls > 1:
+        with pytest.raises(asyncio.CancelledError):
+            await env.run_request(request)
+        if saved_teacher_turns:
+            assert saved[0].outcome == "interrupted"
+            assert any(t.generated_by_teacher for t in saved[0].turn_evaluations)
+        else:
+            assert not saved
+        return
     result = await env.run_request(request)
+    if teacher_output.startswith("late_"):
+        if saved and saved[0].outcome == "infrastructure_failure":
+            assert result.failure is None
+            assert result.result.accepted is True
+            assert saved_teacher_turns
+            assert any(t.generated_by_teacher for t in saved[0].turn_evaluations)
+            return
+        if result.failure is not None:
+            assert not saved_teacher_turns and not saved
+            return
+    if teacher_output in {"inference_failure", "missing_reasoning"} and teacher_calls:
+        assert result.failure is not None
+        assert not saved  # Incomplete Teacher output cannot become accepted training data.
+        assert not saved_teacher_turns  # No incomplete Teacher response reaches Critiquer.
+        assert [path for path, _, _ in calls][-2:] == ["/v1/agent_sessions/close", "/close_session"]
+        return
     assert result.failure is None, result.failure
     assert result.result.outcome == outcome
     assert len([path for path, _, _ in calls if path == "/v1/responses"]) == assistant_calls
@@ -216,7 +303,20 @@ async def test_loop_outcomes_and_audio_only_prefix(
     assert len(final.turn_evaluations) == assistant_calls
     assert len(final.teacher_attempts) == teacher_calls
     assert final.input_prefix[-1].role == "user"
-    assert all(m.text != "Corrected answer." for m in final.input_prefix)
+    if not keep_generating:
+        assert all(m.text != "Corrected answer." for m in final.input_prefix)
+    for turn in final.turn_evaluations:
+        assert turn.generated_by_teacher == (turn.turn_index in saved_teacher_turns)
+        if turn.accepted_response:
+            assert turn.accepted_response.judgment.passed is True
+            assert turn.accepted_response.turn_index == turn.turn_index
+            assert turn.accepted_response.thinking == (
+                "Rationale based only on the visible request." if turn.generated_by_teacher else None
+            )
+    assert all(candidate.turn_index is not None for candidate in final.teacher_attempts)
+    assert all(
+        candidate.thinking == "Rationale based only on the visible request." for candidate in final.teacher_attempts
+    )
     assert [path for path, _, _ in calls][-2:] == ["/v1/agent_sessions/close", "/close_session"]
 
 
@@ -234,7 +334,8 @@ async def test_collector_recovers_finalized_reply_without_inference(tmp_path, mo
     (episodes / "audiomc-test-0000.json").write_text(
         json.dumps(
             {
-                "outcome": "accepted_correction",
+                "outcome": "teacher_correction_exhausted",
+                "training_example": {},
                 "turn_evaluations": [{}, {}],
                 "teacher_attempts": [{}],
                 "metadata": {
@@ -260,5 +361,5 @@ async def test_collector_recovers_finalized_reply_without_inference(tmp_path, mo
     await collect(Namespace(output=tmp_path, env_file=None, max_rollouts=1, target_accepted=1))
     client.post.assert_not_awaited()
     recovered = json.loads((tmp_path / "episode_results.jsonl").read_text())
-    assert recovered["result"]["outcome"] == "accepted_correction"
+    assert recovered["result"]["outcome"] == "teacher_correction_exhausted"
     assert recovered["result"]["turns"] == 2

@@ -8,16 +8,22 @@ paths, partition and account appear only in those example files.
 From the Gym checkout on a login node, using its installed Python environment:
 
 ```bash
-.venv/bin/python -m environment_servers.audiomc_sim.slurm.preflight \
-  --settings environment_servers/audiomc_sim/slurm/tasks.ord.yaml
-
 .venv/bin/python -m environment_servers.audiomc_sim.slurm.submit \
   --settings environment_servers/audiomc_sim/slurm/tasks.ord.yaml
 ```
 
-Submission runs preflight automatically; the first command is useful for checking
-settings independently. Copy the example task/backend files for another cluster.
-Any filename works, including `tasks.settings.yaml`. No `ORD_*` variables are used.
+Submission runs preflight automatically and aborts before `sbatch` if it fails.
+No separate preflight command is needed for normal submission.
+
+Optionally, to check configuration and API accessibility without submitting a job:
+
+```bash
+.venv/bin/python -m environment_servers.audiomc_sim.slurm.preflight \
+  --settings environment_servers/audiomc_sim/slurm/tasks.ord.yaml
+```
+
+Copy the example task/backend files for another cluster. Any filename works,
+including `tasks.settings.yaml`. No `ORD_*` variables are used.
 
 ## Task settings
 
@@ -36,8 +42,17 @@ Use environment references for credentials in backend YAML rather than literal k
 - `simulation_tasks`: `target_trajectory` counts accepted teacher-corrected SFT
   examples. `max_rollouts` bounds all attempts, defaulting to twice the target.
   `seed`, `max_turns`, `max_teacher_trials`, and `concurrency` control generation.
+  `keep_generation_until_max_turn_reached` defaults to `false`; set it to `true`
+  to continue after a failed assistant reply using a rubric-passing teacher
+  replacement. Teacher trials reset for each turn (default: five). If a later
+  repair fails, keep the accepted prefix when it contains a successful Teacher
+  rewrite; exclude the unresolved exchange from training. Stop-reason counters
+  remain independent of accepted trajectory counts.
   `export_every_min` defaults to 230; `export_reserve_min` defaults to 10;
   `max_audio_files` defaults to 50,000. `base_port` sets the internal Gym port range.
+  `cleanup_finished_trajectories` defaults to `true`: after each successful export,
+  completed trajectories that reached `max_turns` have their raw artifacts and
+  matching request removed. Set it to `false` to retain these files.
 - `slurm`: partition/account (optional), allocation `time`, `gpus`,
   `cpus_per_task`, `exclusive`, `job_name`, `container_mounts`, and container `python`.
   The launcher requests one node and one task.
@@ -61,6 +76,9 @@ Each role retains `api_base`, `model_name`, `api_key`, and its existing options.
 Add `serving` to a role to have the job manage a local vLLM process. With no
 `serving`, the endpoint must already be available and is checked during preflight,
 including when the Assistant is API-hosted. Moving a role requires only YAML edits.
+The default and ORD examples use `nvidia/zai-org/glm-5.2` for User and Teacher.
+Their backend settings can be configured independently; identical settings share
+a model wrapper.
 
 ```yaml
 user:
@@ -128,8 +146,14 @@ previous TP1/DP8/EP8, 32 sequences per rank, prefix-cache and audio-limit-50 set
    once the accepted target is reached, allowing in-flight conversations to finish.
    The target can therefore be exceeded. Exhausting `max_rollouts` below the target
    is an error. No warmup, probing, or automatic concurrency selection is performed.
+   By default, a conversation ends at its first assistant failure and accepted
+   teacher correction. With `keep_generation_until_max_turn_reached: true`, the
+   corrected reply enters the conversation history and generation continues.
+   Trajectories with no assistant failures remain excluded as before.
 5. Collection is interrupted at the actual Slurm end time minus the export reserve.
    Completed records are exported; unfinished conversations are counted separately.
+   Cancellation finalizes earlier verified rewrites when graceful shutdown permits;
+   the unresolved exchange never becomes a training target.
    Startup and task preparation consume allocation time. SIGTERM/SIGINT also trigger
    final export. Cancellation waits for any in-progress periodic export to finish
    before starting the final export, including its worker thread. A hard Slurm kill
@@ -144,6 +168,64 @@ Additional files are `services/vllm-N.log`, `slurm-JOBID.log`, and
 interpolations stay unresolved in backend snapshots.
 
 Reuse the same output with the same task/backend settings to resume; completed
-attempts are recovered from durable records. Use a new output directory when changing
+attempts are recovered from durable records, including compacted `episodes.jsonl`
+and exported audio. Keep these files for resume or re-export after cleanup.
+Cleanup runs at the next periodic, count-triggered, or final export; shared prompts,
+shorter completed trajectories, and unfinished traces are retained. Older task
+snapshots missing newly defaulted settings can resume using those defaults.
+Use a new output directory when changing
 models, prompts or generation settings. The earlier ORD calibration artifacts are
 historical experiment outputs and are not part of this launcher.
+
+## Continuing after teacher corrections
+
+```yaml
+simulation_tasks:
+  target_trajectory: 12000
+  max_turns: 6
+  max_teacher_trials: 5
+  keep_generation_until_max_turn_reached: true
+  concurrency: 128
+```
+
+The target counts accepted conversations, not individual teacher replacements.
+A conversation is saved only after all allowed turns have accepted replies and
+at least one required a teacher correction. A failed or ungradable repair excludes
+all its earlier corrections from training output and retains the trace for inspection.
+
+Saved `conversation` includes every accepted assistant reply with a
+`generated_by_teacher` boolean. Each `turn_evaluations` entry retains the original
+`policy_response` and `judgment`, plus the `accepted_response` actually used in
+history and its `generated_by_teacher` flag. `teacher_attempts` retains all trials,
+with a `turn_index` for each. `rejected_teacher_attempts` contains only rejected
+candidates for the last teacher correction's turn.
+
+Saved example schema version is `1.7`. Training consumers reconstruct one example
+for each Teacher-written reply from preceding `conversation` messages and
+`metadata.task.assistant_instructions` / `developer_instructions`. User messages
+supply audio references; their transcripts are inspection annotations, not audio-only
+model inputs. `turn_evaluations` supplies rubrics and grades.
+
+## Teacher correction and native reasoning
+
+For each failed student turn, Teacher receives only assistant/developer
+instructions and the visible conversation through the latest user utterance.
+It returns the spoken answer as plain text; its native API reasoning is captured
+separately in `thinking`. No JSON wrapper or later rationale-generation step is
+used. Rubrics, evaluation configuration, persona, current failed response, prior
+Teacher trials, and critique feedback are excluded from Teacher input.
+Critiquer grades only the answer against the frozen rubrics. Every retry uses
+identical visible context in a fresh request until the first pass or the trial limit.
+
+Set `teacher.reasoning_effort: minimal` in backend YAML (as in the default and ORD
+examples). The setting is forwarded to the endpoint and included in model-wrapper
+sharing decisions; it does not alter other roles sharing the model's weights.
+API preflight separately probes Teacher with its configured effort and requires a
+nonempty answer plus exposed native reasoning. HTTP 200 alone is insufficient.
+A managed local Teacher is probed after startup and before collection. Models
+that return no reasoning, or configurations disabling its parser, fail startup.
+
+Every Teacher trial retains answer, native reasoning, and grade. Accepted answer
+text enters later dialogue; reasoning never enters spoken text or grading requests.
+Empty/incomplete answers or missing reasoning are generation failures. Use a new
+collection output directory to adopt these templates and backend settings.

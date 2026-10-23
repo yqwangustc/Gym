@@ -144,18 +144,28 @@ def test_shared_local_model_starts_once_and_conflicts_rejected(deployment):
     backends["user"] = dict(backends["assistant"])
     backends["teacher"] = {**backends["assistant"], "serving": None}
     assert len(preflight.managed_endpoints(backends)) == 1
+    backends["planner"] = {**backends["assistant"], "api_base": "http://127.0.0.1:8001/v1"}
+    assert len(preflight.managed_endpoints(backends)) == 2
     backends["user"] = {**backends["user"], "model_name": "different"}
     with pytest.raises(ValueError, match="Conflicting"):
         preflight.managed_endpoints(backends)
 
 
-def test_prepare_materializes_requested_prompt_and_resumes_frozen_tasks(deployment):
+@pytest.mark.parametrize("keep_generating", [False, True])
+def test_prepare_materializes_requested_prompt_and_resumes_frozen_tasks(deployment, keep_generating):
     settings, backends, _ = deployment
+    settings.simulation_tasks.keep_generation_until_max_turn_reached = keep_generating
     run.prepare_collection(settings, backends)
     rows = [json.loads(line) for line in (settings.output / "tasks.jsonl").read_text().splitlines()]
     assert len(rows) == 4
+    assert all(row["task_input"]["keep_generation_until_max_turn_reached"] is keep_generating for row in rows)
     assert all(row["task_input"]["assistant_instructions"] == "Answer conversationally.\n" for row in rows)
     original = (settings.output / "tasks.jsonl").read_bytes()
+    # Adding a defaulted operational setting must not make older snapshots unresumable.
+    frozen = settings.output / "task_settings.json"
+    prior = json.loads(frozen.read_text())
+    prior["simulation_tasks"].pop("cleanup_finished_trajectories")
+    frozen.write_text(json.dumps(prior))
     run.prepare_collection(settings, backends)
     assert (settings.output / "tasks.jsonl").read_bytes() == original
     settings.simulation_tasks.concurrency += 1

@@ -29,7 +29,9 @@ class SimulationTasks(SettingsModel):
     target_trajectory: int = Field(ge=1)
     seed: int = 44
     max_turns: int = Field(default=6, ge=1)
-    max_teacher_trials: int = Field(default=3, ge=1)
+    max_teacher_trials: int = Field(default=5, ge=1)
+    keep_generation_until_max_turn_reached: bool = False
+    cleanup_finished_trajectories: bool = True
     concurrency: int = Field(default=64, ge=1)
     max_rollouts: int | None = Field(default=None, ge=1)
     export_every_min: float = Field(default=230, gt=0)
