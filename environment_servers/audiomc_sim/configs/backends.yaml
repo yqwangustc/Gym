@@ -7,6 +7,10 @@
 # starts services with a non-null serving block; see slurm/tasks.ord.yaml.
 # API credentials should remain environment references, not literal keys.
 planner:
+  # All roles default to four bounded API attempts, exponential backoff, and jitter.
+  request_attempts: 4
+  request_timeout_seconds: 180
+  retry_backoff: {initial_seconds: 1, multiplier: 2, max_seconds: 30, jitter_fraction: 0.5}
   api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
   model_name: openai/openai/gpt-6-sol
   api_key: ${oc.env:OPENAI_API_KEY}

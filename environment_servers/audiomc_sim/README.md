@@ -281,3 +281,8 @@ earlier verified rewrites when finalization succeeds. The unresolved exchange an
 all failed candidates remain in the episode/inspection record. `result.accepted`
 controls the collection quota independently of `result.outcome`, which records why
 the conversation stopped. Teacher retries default to five per failed turn.
+
+API error retries use the per-role `request_attempts`, `request_timeout_seconds`,
+and `retry_backoff` backend settings described in [Slurm collection](slurm/README.md#backend-settings).
+The same policy applies to local collection and TTS, without changing Teacher
+quality-retry semantics.

@@ -126,3 +126,8 @@ Compacted trajectories remain in `episodes.jsonl` and the exported audio archive
 subsequent exports merge them with new raw records, including when changing shard
 size. Keep these files for resume/re-export. Training consumers only need
 `rollout.jsonl` and its referenced audio archives.
+
+TTS retries use capped exponential backoff with additive jitter and honor provider
+`Retry-After` cooldowns. `tts_retry_backoff` configures the delay policy;
+`tts_request_attempts` and `tts_request_timeout_seconds` bound individual calls.
+The transport does not add hidden retries; canceled requests stop immediately.

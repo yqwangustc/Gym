@@ -24,6 +24,7 @@ from nemo_gym.base_resources_server import (
     SimpleResourcesServer,
 )
 from nemo_gym.config_types import AggregateMetrics, AggregateMetricsRequest, ModelServerRef
+from nemo_gym.retry import RetryBackoff
 from resources_servers.audiomc_sim.common import Prompts, digest, infer, parse_json, prompt_values
 from resources_servers.audiomc_sim.contracts import (
     AudioRef,
@@ -56,6 +57,7 @@ class AudioMCSimConfig(BaseResourcesServerConfig):
     tts_api_key: str
     tts_request_timeout_seconds: float = Field(default=180, gt=0)
     tts_request_attempts: int = Field(default=1, ge=1)
+    tts_retry_backoff: RetryBackoff = Field(default_factory=RetryBackoff)
     tts_model: str = "openai/openai/gpt-4o-mini-tts"
     tts_voice: str = "alloy"
     tts_voices: list[str] | None = Field(default=None, min_length=1)
@@ -279,6 +281,7 @@ class AudioMCSimResources(SimpleResourcesServer):
                 },
                 timeout_seconds=self.config.tts_request_timeout_seconds,
                 attempts=self.config.tts_request_attempts,
+                retry_backoff=self.config.tts_retry_backoff,
                 events=session.invocations,
                 turn_index=body.turn_index,
             )

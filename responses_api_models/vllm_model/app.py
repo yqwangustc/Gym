@@ -51,6 +51,7 @@ from nemo_gym.responses_converter import (
     VLLMConverterResponsesToChatCompletionsState,  # noqa: F401
     split_responses_input_output_items,  # noqa: F401
 )
+from nemo_gym.retry import RetryBackoff
 from nemo_gym.rollout_correlation import current_rollout_id
 from nemo_gym.server_utils import SESSION_ID_KEY, _redacted_url, is_nemo_gym_fastapi_entrypoint
 from nemo_gym.token_id_capture import (
@@ -328,6 +329,9 @@ class VLLMModelConfig(BaseResponsesAPIModelConfig):
     extra_body: Optional[Dict[str, Any]] = None
 
     default_headers: Dict[str, str] = Field(default_factory=dict)
+    upstream_request_attempts: int = Field(default=3, ge=1)
+    upstream_request_timeout_seconds: float | None = Field(default=None, gt=0)
+    upstream_retry_backoff: RetryBackoff | None = None
 
     # Optional path to a file that publishes the current backend base_url.
     # Used for shared serving jobs that move hosts when they restart.
@@ -469,6 +473,9 @@ class VLLMModel(SimpleResponsesAPIModel):
                 base_url=base_url,
                 api_key=self.config.api_key,
                 default_headers=self.config.default_headers,
+                max_http_attempts=self.config.upstream_request_attempts,
+                request_timeout_seconds=self.config.upstream_request_timeout_seconds,
+                retry_backoff=self.config.upstream_retry_backoff,
                 max_connection_retries=(
                     self.config.endpoint_connection_retries if self.config.endpoint_file else None
                 ),
@@ -1872,6 +1879,9 @@ class VLLMModel(SimpleResponsesAPIModel):
                 base_url=url,
                 api_key=self.config.api_key,
                 default_headers=self.config.default_headers,
+                max_http_attempts=self.config.upstream_request_attempts,
+                request_timeout_seconds=self.config.upstream_request_timeout_seconds,
+                retry_backoff=self.config.upstream_retry_backoff,
                 max_connection_retries=self.config.endpoint_connection_retries,
             )
         ]

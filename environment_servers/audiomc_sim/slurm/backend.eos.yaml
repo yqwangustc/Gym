@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 planner:
+  # All roles default to four bounded API attempts, exponential backoff, and jitter.
+  request_attempts: 4
+  request_timeout_seconds: 180
+  retry_backoff: {initial_seconds: 1, multiplier: 2, max_seconds: 30, jitter_fraction: 0.5}
   api_base: ${oc.env:OPENAI_API_BASE,https://inference-api.nvidia.com/v1}
   model_name: openai/openai/gpt-6-sol
   api_key: ${oc.env:OPENAI_API_KEY}
@@ -34,10 +38,10 @@ assistant:
     tp: 1
     dp: 8
     ep: 8
-    max_num_seqs_per_dp_rank: 32
+    max_num_seqs_per_dp_rank: 64
     prefix_cache: true
     audio_limit: 50
-    max_model_len: 16384
+    max_model_len: 32768
     gpu_memory_utilization: 0.90
     reasoning_parser: nemotron_v3
     extra_args: [--audio-mode, offline, --image-limit, '0', --video-limit, '0']

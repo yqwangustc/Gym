@@ -5,6 +5,9 @@ planner_model:
       base_url: https://inference-api.nvidia.com/v1
       api_key: ${oc.env:OPENAI_API_KEY}
       model: openai/openai/gpt-6-sol
+      upstream_request_attempts: 4
+      upstream_request_timeout_seconds: 180
+      upstream_retry_backoff: {initial_seconds: 1, multiplier: 2, max_seconds: 30, jitter_fraction: 0.5}
       return_token_id_information: false
       uses_reasoning_parser: true
       audio_root: null
@@ -15,6 +18,9 @@ user_teacher_model:
       base_url: https://inference-api.nvidia.com/v1
       api_key: ${oc.env:OPENAI_API_KEY}
       model: nvidia/zai-org/glm-5.2
+      upstream_request_attempts: 4
+      upstream_request_timeout_seconds: 180
+      upstream_retry_backoff: {initial_seconds: 1, multiplier: 2, max_seconds: 30, jitter_fraction: 0.5}
       return_token_id_information: false
       uses_reasoning_parser: true
       audio_root: null
@@ -25,6 +31,9 @@ teacher_model:
       base_url: https://inference-api.nvidia.com/v1
       api_key: ${oc.env:OPENAI_API_KEY}
       model: nvidia/zai-org/glm-5.2
+      upstream_request_attempts: 4
+      upstream_request_timeout_seconds: 180
+      upstream_retry_backoff: {initial_seconds: 1, multiplier: 2, max_seconds: 30, jitter_fraction: 0.5}
       return_token_id_information: false
       uses_reasoning_parser: true
       sampling_overrides:
@@ -37,6 +46,9 @@ assistant_model:
       base_url: http://127.0.0.1:8000/v1
       api_key: unused
       model: vllm_local
+      upstream_request_attempts: 4
+      upstream_request_timeout_seconds: 180
+      upstream_retry_backoff: {initial_seconds: 1, multiplier: 2, max_seconds: 30, jitter_fraction: 0.5}
       return_token_id_information: false
       uses_reasoning_parser: true
       audio_root: ${oc.env:AUDIOMC_OUTPUT_DIR}/artifacts
@@ -63,6 +75,8 @@ resources:
       artifact_root: ${oc.env:AUDIOMC_OUTPUT_DIR}/artifacts
       tts_endpoint: https://inference-api.nvidia.com/v1/audio/speech
       tts_api_key: ${oc.env:OPENAI_API_KEY}
+      tts_request_attempts: 4
+      tts_request_timeout_seconds: 45
       tts_voices: [alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin, cedar]
       num_workers: 1
 environment:

@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
+import logging
 from asyncio import sleep
 from typing import (
     Annotated,
@@ -28,7 +29,7 @@ from typing import (
     get_args,
 )
 
-from aiohttp import ClientTimeout
+from aiohttp import ClientConnectionError, ClientPayloadError, ClientTimeout
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionAllowedToolChoiceParam,
@@ -187,6 +188,7 @@ from pydantic import (
 )
 from typing_extensions import TypedDict
 
+from nemo_gym.retry import RetryBackoff
 from nemo_gym.server_utils import (
     _GLOBAL_AIOHTTP_CLIENT_REQUEST_DEBUG,
     MAX_NUM_TRIES,
@@ -1551,6 +1553,10 @@ class NeMoGymAsyncOpenAI(BaseModel):  # pragma: no cover
     )
 
     max_http_attempts: int = Field(default=MAX_NUM_TRIES, ge=1)
+    retry_backoff: RetryBackoff | None = Field(
+        default=None,
+        description="Opt into one bounded exponential/jitter schedule for transport and transient HTTP errors.",
+    )
 
     default_headers: Dict[str, str] = Field(
         default_factory=dict,
@@ -1642,6 +1648,8 @@ class NeMoGymAsyncOpenAI(BaseModel):  # pragma: no cover
         return await self._request_with_retry(**request_kwargs)
 
     async def _request_with_retry(self, **request_kwargs: Dict) -> ClientResponse:
+        if self.retry_backoff is not None:
+            return await self._request_with_backoff(**request_kwargs)
         if self._permanent_trip is not None:
             self._raise_permanent_error()
         max_num_tries = self.max_num_tries or self.max_http_attempts
@@ -1683,6 +1691,53 @@ class NeMoGymAsyncOpenAI(BaseModel):  # pragma: no cover
             await sleep(0.5)
 
         await raise_for_status(response)
+
+    async def _request_with_backoff(self, **request_kwargs: Dict) -> ClientResponse:
+        """Own the full retry schedule, freeing sockets before every cooldown."""
+        attempts = self.max_num_tries or self.max_http_attempts
+        request_kwargs = request_kwargs | {"_max_num_tries": 1}
+        streaming = bool((request_kwargs.get("json") or {}).get("stream"))
+        for attempt in range(attempts):
+            if self._permanent_trip is not None:
+                self._raise_permanent_error()
+            response = None
+            try:
+                response = await request(**request_kwargs)
+                # Buffer non-streaming bodies inside the attempt, so a truncated
+                # response or read timeout is retried before reaching the caller.
+                content = await response.read() if not streaming or not response.ok else None
+                if response.status in (401, 403) and _error_body_is_permanent_auth(content):
+                    self._trip_permanent_error(response.status, content, request_kwargs.get("url"))
+                if response.status == 429 and _error_body_is_permanent_quota(content):
+                    self._trip_permanent_error(response.status, content, request_kwargs.get("url"))
+                await raise_for_status(response, content)
+                return response
+            except (ClientResponseError, ClientConnectionError, ClientPayloadError, TimeoutError) as error:
+                if response is not None:
+                    response.release()
+                if isinstance(error, PermanentEndpointError):
+                    raise
+                if isinstance(error, ClientResponseError) and not (
+                    error.status in (408, 429) or 500 <= error.status < 600
+                ):
+                    raise
+                if attempt + 1 == attempts:
+                    raise
+                delay = self.retry_backoff.delay(attempt, getattr(error, "headers", None))
+                logging.getLogger(__name__).warning(
+                    "Model API attempt %d/%d failed: %s status=%s; retrying in %.2fs",
+                    attempt + 1,
+                    attempts,
+                    type(error).__name__,
+                    getattr(error, "status", None),
+                    delay,
+                )
+                await sleep(delay)
+            except BaseException:
+                if response is not None:
+                    response.release()
+                raise
+        raise AssertionError("At least one API attempt is required")
 
     async def _raise_for_status(self, response: ClientResponse, request_kwargs: Dict[str, Any]) -> None:
         if not response.ok and _GLOBAL_AIOHTTP_CLIENT_REQUEST_DEBUG:

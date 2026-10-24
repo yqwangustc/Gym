@@ -68,11 +68,16 @@ def test_environment_loaded_before_interpolation_and_snapshots_keep_key_referenc
     assert settings.simulation_tasks.max_rollouts == 4
 
 
-def test_submission_and_container_commands_use_settings_without_cluster_defaults(deployment):
+@pytest.mark.parametrize("omit_gpus_per_node", [None, False, True])
+def test_submission_and_container_commands_use_settings_without_cluster_defaults(deployment, omit_gpus_per_node):
     settings, _, path = deployment
+    if omit_gpus_per_node is not None:
+        settings.slurm.omit_gpus_per_node = omit_gpus_per_node
     command = submit.sbatch_command(settings, path)
     assert "--partition=test" in command and "--account=test-account" in command
-    assert "--gpus-per-node=1" in command and str(path) in command
+    assert ("--gpus-per-node=1" in command) is (not omit_gpus_per_node)
+    assert settings.slurm.gpus == 1  # Still used by allocation and serving validation.
+    assert str(path) in command
     command = submit.srun_command(settings, path)
     assert f"--container-image={settings.container}" in command
     assert "environment_servers.audiomc_sim.slurm.incontainer_run" in command
@@ -106,15 +111,18 @@ def test_nemo_and_standard_serving_flags_and_ep_validation(deployment):
 
 
 @pytest.mark.asyncio
-async def test_preflight_checks_external_assistant_deduplicates_and_releases(deployment, monkeypatch):
+@pytest.mark.parametrize("assistant_status", [200, 410])
+async def test_preflight_checks_external_assistant_deduplicates_and_releases(
+    deployment, monkeypatch, capsys, assistant_status
+):
     settings, backends, _ = deployment
     backends["assistant"].update(serving=None, api_base="https://assistant.invalid/v1")
-    calls, released = [], []
+    calls, released, progress = [], [], []
 
     class Response:
         def __init__(self, url):
             self.url = url
-            self.status = 410 if "assistant.invalid" in url else 200
+            self.status = assistant_status if "assistant.invalid" in url else 200
 
         async def json(self):
             return {"choices": [{"message": {"content": "hello", "reasoning_content": "Native reasoning"}}]}
@@ -126,6 +134,8 @@ async def test_preflight_checks_external_assistant_deduplicates_and_releases(dep
             released.append(self.url)
 
     async def request(method, url, **kwargs):
+        progress.append(capsys.readouterr().out)
+        assert "[preflight] CHECK " in progress[-1]  # Visible before the network request finishes.
         calls.append(url)
         return Response(url)
 
@@ -134,9 +144,22 @@ async def test_preflight_checks_external_assistant_deduplicates_and_releases(dep
     results = await preflight.check(settings)
     assert len(calls) == 4 and calls == released
     assistant = next(result for result in results if result["role"] == "assistant")
-    assert not assistant["ok"]
-    with pytest.raises(RuntimeError, match="preflight failed"):
+    assert assistant["ok"] is (assistant_status == 200)
+    if assistant_status == 200:
         await preflight.require_preflight(settings)
+    else:
+        with pytest.raises(RuntimeError, match="preflight failed"):
+            await preflight.require_preflight(settings)
+    progress.append(capsys.readouterr().out)
+    output = "".join(progress)
+    assert "SKIP rubric_builder: shares the planner probe" in output
+    assert "PASS teacher: HTTP 200; final answer and native reasoning received" in output
+    assert "PASS tts: HTTP 200; WAV audio received" in output
+    if assistant_status == 410:
+        assert "FAIL assistant: HTTP 410" in output and "3/4 API probes passed" in output
+    else:
+        assert "PASS: 4/4 API probes passed" in output
+    assert "test-secret" not in output and "Native reasoning" not in output
 
 
 def test_shared_local_model_starts_once_and_conflicts_rejected(deployment):

@@ -30,6 +30,7 @@ slurm:
   account: nemotron_speech_chat
   time: '04:00:00'
   gpus: 8
+  omit_gpus_per_node: true
   cpus_per_task: 32
   exclusive: true
   # Gym's prepared environment runs the controller; each serving.python uses the image's vLLM.

@@ -14,7 +14,12 @@ From the Gym checkout on a login node, using its installed Python environment:
 ```
 
 Submission runs preflight automatically and aborts before `sbatch` if it fails.
-No separate preflight command is needed for normal submission.
+No separate preflight command is needed for normal submission. Progress is flushed
+immediately: configuration and planned GPU checks, each API request and elapsed
+time, shared-probe skips, and deferred local-service checks. Each probe reports
+PASS/FAIL with HTTP status and validation details; Teacher checks include native
+reasoning and TTS checks include WAV audio. A final summary and JSON results are
+printed before submission. Credentials and generated response text are not logged.
 
 Optionally, to check configuration and API accessibility without submitting a job:
 
@@ -64,7 +69,11 @@ Use environment references for credentials in backend YAML rather than literal k
   matching request removed. Set it to `false` to retain these files.
 - `slurm`: partition/account (optional), allocation `time`, `gpus`,
   `cpus_per_task`, `exclusive`, `job_name`, `container_mounts`, and container `python`.
-  The launcher requests one node and one task.
+  The launcher requests one node and one task. `omit_gpus_per_node` defaults to
+  `false`; set it to `true` on clusters such as EOS where an exclusive node
+  allocation already provides its GPUs and `--gpus-per-node` is unsupported.
+  This omits only the `sbatch` argument; `gpus` still specifies the expected GPU
+  count for preflight and runtime allocation validation.
 
 The container interpreter must have Gym and its dependencies installed, alongside
 its serving dependencies. The launcher does not replace the image's patched vLLM.
@@ -88,6 +97,37 @@ including when the Assistant is API-hosted. Moving a role requires only YAML edi
 The default and ORD examples use `nvidia/zai-org/glm-5.2` for User and Teacher.
 Their backend settings can be configured independently; identical settings share
 a model wrapper.
+
+All AudioMC backends default to four API attempts with a 180-second timeout per
+attempt. TTS examples use a 45-second timeout. Set `request_attempts` and
+`request_timeout_seconds` independently per role. Configure delays with:
+
+```yaml
+teacher:
+  # Keep api_base, model_name, api_key and reasoning_effort as before.
+  request_attempts: 4
+  request_timeout_seconds: 180
+  retry_backoff:
+    initial_seconds: 1
+    multiplier: 2
+    max_seconds: 30
+    jitter_fraction: 0.5
+```
+
+Retry delays are exponential with uniform additive jitter: the first three waits
+are 1–1.5, 2–3, and 4–6 seconds. Calculated waits are capped at 30 seconds.
+`Retry-After` (seconds or HTTP date) and `retry-after-ms` set a minimum cooldown,
+with jitter added; a provider-directed cooldown can exceed the configured cap.
+Timeouts, connection failures, truncated response bodies, HTTP 408/429, and 5xx
+are retryable. Other 4xx and recognized spent-quota/auth failures stop immediately.
+Sockets are released before sleeping, cancellation stops the retry loop, and the
+underlying transport makes one attempt per scheduled try. Backend sharing also
+requires identical retry settings. Teacher rubric failures still start a fresh
+rewrite without service-error backoff; API retries do not consume extra Teacher
+rewrite trials. Login-node preflight keeps its single-attempt, fail-fast probes.
+
+These settings are saved in the run configuration and apply when servers start;
+editing YAML does not change a running job's retry policy.
 
 ```yaml
 user:

@@ -23,6 +23,7 @@ from environment_servers.audiomc_sim.app import AudioMCSimEnvironment, AudioMCSi
 from environment_servers.audiomc_sim.backends import DEFAULT_BACKEND_CONFIG, TEXT_ROLES, load_backends
 from environment_servers.audiomc_sim.monitor import CollectionMonitor
 from nemo_gym.config_types import BaseServerConfig
+from nemo_gym.retry import RetryBackoff
 from nemo_gym.server_utils import ServerClient, get_response_json, raise_for_status
 from resources_servers.audiomc_sim.app import AudioMCSimConfig, AudioMCSimResources
 from resources_servers.audiomc_sim.export import DEFAULT_MAX_AUDIO_FILES, export_collection
@@ -105,6 +106,9 @@ def graph_config(
                 "api_key": backend["api_key"],
                 "uses_reasoning_parser": backend["uses_reasoning_parser"],
                 "reasoning_effort": backend.get("reasoning_effort"),
+                "request_attempts": backend.get("request_attempts", 4),
+                "request_timeout_seconds": backend.get("request_timeout_seconds", 180),
+                "retry_backoff": backend.get("retry_backoff", RetryBackoff().model_dump()),
                 "audio": role == "assistant",
             },
             sort_keys=True,
@@ -126,6 +130,9 @@ def graph_config(
                     "model": backend["model_name"],
                     "return_token_id_information": False,
                     "uses_reasoning_parser": backend["uses_reasoning_parser"],
+                    "upstream_request_attempts": backend.get("request_attempts", 4),
+                    "upstream_request_timeout_seconds": backend.get("request_timeout_seconds", 180),
+                    "upstream_retry_backoff": backend.get("retry_backoff", RetryBackoff().model_dump()),
                     "sampling_overrides": {"reasoning_effort": backend["reasoning_effort"]}
                     if backend.get("reasoning_effort") is not None
                     else None,
@@ -167,7 +174,8 @@ def graph_config(
                 "tts_model": tts["model_name"],
                 "tts_voices": tts["voices"],
                 "tts_request_timeout_seconds": tts.get("request_timeout_seconds", 180),
-                "tts_request_attempts": tts.get("request_attempts", 1),
+                "tts_request_attempts": tts.get("request_attempts", 4),
+                "tts_retry_backoff": tts.get("retry_backoff", RetryBackoff().model_dump()),
                 "num_workers": 1,
             }
         }

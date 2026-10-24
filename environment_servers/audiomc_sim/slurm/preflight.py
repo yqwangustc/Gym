@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from time import perf_counter
 
 from aiohttp import ClientError, ClientTimeout
 from omegaconf import OmegaConf
@@ -39,16 +40,30 @@ def managed_endpoints(backends: dict[str, dict[str, object]]) -> dict[str, dict[
 async def check(settings: TaskSettings, *, managed_teacher: bool = False) -> list[dict[str, object]]:
     """Probe every externally managed text/speech backend, including API assistants."""
     os.environ.setdefault("NEMO_GYM_CONFIG_DICT", "{}")
+    print(f"[preflight] Loading backend settings: {settings.backend}", flush=True)
     backends = load_backends(settings.backend)
     managed = managed_endpoints(backends)
+    print(
+        f"[preflight] PASS backend configuration: {len(backends)} roles, {len(managed)} managed services", flush=True
+    )
     for backend in managed.values():
-        validate_selection(LocalServing.model_validate(backend["serving"]), available=settings.slurm.gpus)
-    results, seen = [], set()
+        serving = LocalServing.model_validate(backend["serving"])
+        validate_selection(serving, available=settings.slurm.gpus)
+        print(
+            f"[preflight] PASS planned GPU selection for {backend['model_name']}: "
+            f"allocation={settings.slurm.gpus}, TP={serving.tp}, DP={serving.dp}, EP={serving.ep} "
+            "(actual allocation checked inside the job)",
+            flush=True,
+        )
+    phase = "managed Teacher reasoning" if managed_teacher else "external API"
+    print(f"[preflight] Starting {phase} probes (90-second timeout per request)", flush=True)
+    results, seen = [], {}
     for role, backend in backends.items():
         if managed_teacher:
             if role != "teacher" or backend["api_base"] not in managed:
                 continue
         elif backend["api_base"] in managed:
+            print(f"[preflight] DEFER {role}: locally managed; health checked after service startup", flush=True)
             continue
         key = OmegaConf.to_container(OmegaConf.create({"key": backend["api_key"]}), resolve=True)["key"]
         speech = role == "tts"
@@ -62,8 +77,9 @@ async def check(settings: TaskSettings, *, managed_teacher: bool = False) -> lis
             needs_reasoning,
         )
         if identity in seen:
+            print(f"[preflight] SKIP {role}: shares the {seen[identity]} probe", flush=True)
             continue
-        seen.add(identity)
+        seen[identity] = role
         payload = {"model": backend["model_name"]}
         if speech:
             payload.update(input="Hello.", voice=backend["voices"][0], response_format="wav")
@@ -82,6 +98,14 @@ async def check(settings: TaskSettings, *, managed_teacher: bool = False) -> lis
         result = {"role": role, "model": backend["model_name"]}
         if backend.get("reasoning_effort") is not None:
             result["reasoning_effort"] = backend["reasoning_effort"]
+        if speech:
+            detail = f"WAV synthesis, voice={backend['voices'][0]}"
+        elif needs_reasoning:
+            detail = f"final answer + native reasoning, effort={backend.get('reasoning_effort') or 'provider default'}"
+        else:
+            detail = "chat completion"
+        print(f"[preflight] CHECK {role}: {backend['model_name']} ({detail})", flush=True)
+        started = perf_counter()
         try:
             response = await request(
                 "POST",
@@ -94,12 +118,18 @@ async def check(settings: TaskSettings, *, managed_teacher: bool = False) -> lis
             try:
                 result["status"] = response.status
                 result["ok"] = 200 <= response.status < 300
+                if not result["ok"]:
+                    result["error"] = f"HTTP {response.status}"
                 if speech and result["ok"]:
                     body = await response.read()
                     result["ok"] = body.startswith(b"RIFF") and body[8:12] == b"WAVE"
+                    if not result["ok"]:
+                        result["error"] = "TTS endpoint did not return WAV audio"
                 elif result["ok"]:
                     choices = (await response.json()).get("choices") or []
                     result["ok"] = bool(choices)
+                    if not choices:
+                        result["error"] = "Chat endpoint returned no choices"
                     if needs_reasoning:
                         choice = choices[0] if choices else {}
                         message = choice.get("message") or {}
@@ -118,14 +148,36 @@ async def check(settings: TaskSettings, *, managed_teacher: bool = False) -> lis
                 response.release()
         except (ClientError, TimeoutError, ValueError) as error:
             result.update(ok=False, error_type=type(error).__name__)
+        verdict = "PASS" if result["ok"] else "FAIL"
+        if not result["ok"]:
+            evidence = result.get("error", result.get("error_type", "response validation failed"))
+        elif speech:
+            evidence = "WAV audio received"
+        elif needs_reasoning:
+            evidence = "final answer and native reasoning received"
+        else:
+            evidence = "chat response received"
+        status = f"HTTP {result['status']}; " if "status" in result else ""
+        print(f"[preflight] {verdict} {role}: {status}{evidence} ({perf_counter() - started:.1f}s)", flush=True)
         results.append(result)
     return results
 
 
 async def require_preflight(settings: TaskSettings, *, managed_teacher: bool = False) -> None:
     """Abort startup if any configured external model fails an actual request."""
-    results = await check(settings, managed_teacher=managed_teacher)
+    started = perf_counter()
+    try:
+        results = await check(settings, managed_teacher=managed_teacher)
+    except Exception as error:
+        print(f"[preflight] FAIL configuration/probe setup: {type(error).__name__}", flush=True)
+        raise
     print(json.dumps(results, indent=2), flush=True)
+    passed = sum(bool(result["ok"]) for result in results)
+    verdict = "PASS" if passed == len(results) else "FAIL"
+    print(
+        f"[preflight] {verdict}: {passed}/{len(results)} API probes passed in {perf_counter() - started:.1f}s",
+        flush=True,
+    )
     if not all(result["ok"] for result in results):
         raise RuntimeError("API preflight failed; aborting startup")
 
@@ -139,6 +191,7 @@ def main() -> None:
         help="Task YAML containing resources, backend path and collection settings.",
     )
     args = parser.parse_args()
+    print(f"[preflight] Loading task settings and environment: {args.settings}", flush=True)
     asyncio.run(require_preflight(load_settings(args.settings)))
 
 

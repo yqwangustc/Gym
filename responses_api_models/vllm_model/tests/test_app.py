@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from copy import deepcopy
 from typing import Any, Union
 from unittest.mock import AsyncMock, MagicMock
@@ -6119,7 +6120,13 @@ class TestEndpointFile:
 
     def test_publish_rebinds_clients_and_clears_sessions(self, tmp_path) -> None:
         (tmp_path / "endpoint.txt").write_text("http://new-host:8712/v1\n")
-        server = self._make_server(tmp_path, endpoint_check_interval_s=3600.0)
+        server = self._make_server(
+            tmp_path,
+            endpoint_check_interval_s=3600.0,
+            upstream_request_attempts=4,
+            upstream_request_timeout_seconds=90,
+            upstream_retry_backoff={"initial_seconds": 2},
+        )
         server._session_id_to_client["session-on-old-host"] = server._clients[0]
 
         server._maybe_rebind_endpoint()
@@ -6130,10 +6137,15 @@ class TestEndpointFile:
         # against a dead host fail fast and re-enter through the rebound
         # client; sessions re-resolve onto the new host.
         assert server._clients[0].max_connection_retries == 8
+        assert server._clients[0].max_http_attempts == 4
+        assert server._clients[0].request_timeout_seconds == 90
+        assert server._clients[0].retry_backoff.initial_seconds == 2
         assert not server._session_id_to_client
         # Within endpoint_check_interval_s the filesystem is left alone, so a
         # fresh publish is only seen once the window is over.
         (tmp_path / "endpoint.txt").write_text("http://newer-host:8712/v1\n")
+        published_mtime = (tmp_path / "endpoint.txt").stat().st_mtime + 1
+        os.utime(tmp_path / "endpoint.txt", (published_mtime, published_mtime))
         server._maybe_rebind_endpoint()
         assert server.config.base_url == ["http://new-host:8712/v1"]
         server._endpoint_last_check_at = None  # window over: the next call re-checks
@@ -6158,6 +6170,9 @@ class TestEndpointFile:
             server._maybe_rebind_endpoint()
 
         endpoint_file.write_text("http://placeholder:8712/v1\n")  # republish on the SAME host
+        # A fast rewrite can have the same filesystem mtime as the empty file.
+        published_mtime = endpoint_file.stat().st_mtime + 1
+        os.utime(endpoint_file, (published_mtime, published_mtime))
         now = 1301.5  # within the check window: the publish is not seen yet, the raise stays loud
         with raises(RuntimeError, match="no longer published"):
             server._maybe_rebind_endpoint()

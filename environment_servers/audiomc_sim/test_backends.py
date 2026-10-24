@@ -189,3 +189,22 @@ def test_reasoning_effort_is_role_specific_and_controls_wrapper_sharing(tmp_path
     OmegaConf.save(OmegaConf.create(config), path)
     graph = graph_config(output=tmp_path, base_port=19000, backends=load_backends(path))
     assert role_ref(graph, "user") == role_ref(graph, "teacher")
+
+
+@pytest.mark.parametrize("role", TEXT_ROLES)
+def test_role_retry_options_reach_wrapper_without_sharing_different_policies(tmp_path, role):
+    from responses_api_models.vllm_model.app import VLLMModelConfig
+
+    config, path = write_config(tmp_path)
+    config[role].update(request_attempts=2, request_timeout_seconds=90, retry_backoff={"initial_seconds": 3})
+    config["tts"].update(retry_backoff={"initial_seconds": 4})
+    OmegaConf.save(OmegaConf.create(config), path)
+    graph = graph_config(output=tmp_path, base_port=19000, backends=load_backends(path))
+    for candidate in TEXT_ROLES:
+        wrapper = graph[role_ref(graph, candidate)["name"]]["responses_api_models"]["vllm_model"]
+        parsed = VLLMModelConfig.model_validate(wrapper)
+        assert parsed.upstream_request_attempts == (2 if candidate == role else 4)
+        assert parsed.upstream_request_timeout_seconds == (90 if candidate == role else 180)
+        assert parsed.upstream_retry_backoff.initial_seconds == (3 if candidate == role else 1)
+    resources = AudioMCSimConfig.model_validate(graph["resources"]["resources_servers"]["audiomc_sim"])
+    assert resources.tts_retry_backoff.initial_seconds == 4

@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 from omegaconf import OmegaConf
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from nemo_gym.retry import RetryBackoff
+
 
 DEFAULT_BACKEND_CONFIG = Path("environment_servers/audiomc_sim/configs/backends.yaml")
 TEXT_ROLES = ("planner", "rubric_builder", "critiquer", "user", "teacher", "assistant")
@@ -55,6 +57,9 @@ class Endpoint(BaseModel):
     api_base: str
     model_name: str = Field(min_length=1)
     api_key: str = "unused"
+    request_attempts: int = Field(default=4, ge=1)
+    request_timeout_seconds: float = Field(default=180.0, gt=0)
+    retry_backoff: RetryBackoff = Field(default_factory=RetryBackoff)
     serving: LocalServing | None = None
 
     @field_validator("api_base")
@@ -76,8 +81,6 @@ class AssistantBackend(ModelBackend):
 
 
 class SpeechBackend(Endpoint):
-    request_timeout_seconds: float = Field(default=180, gt=0)
-    request_attempts: int = Field(default=1, ge=1)
     voices: list[str] = Field(default_factory=lambda: ["alloy"], min_length=1)
 
     @model_validator(mode="before")

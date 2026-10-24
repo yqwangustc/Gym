@@ -53,6 +53,7 @@ class SlurmSettings(SettingsModel):
     account: str | None = None
     time: str = "04:00:00"
     gpus: int = Field(default=8, ge=0)
+    omit_gpus_per_node: bool = False
     cpus_per_task: int = Field(default=16, ge=1)
     exclusive: bool = True
     job_name: str = "audiomc-sim"

@@ -39,7 +39,7 @@ async def test_timeout_retries_and_records_each_attempt_without_changing_payload
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,expected_calls", [(400, 1), (429, 3), (503, 3)])
+@pytest.mark.parametrize("status,expected_calls", [(400, 1), (408, 3), (429, 3), (503, 3)])
 async def test_permanent_errors_stop_and_recoverable_errors_have_bounded_attempts(monkeypatch, status, expected_calls):
     request = AsyncMock(side_effect=ClientResponseError(None, (), status=status))
     monkeypatch.setattr("resources_servers.audiomc_sim.speech.http_request", request)
@@ -54,5 +54,39 @@ async def test_cancellation_never_retries(monkeypatch):
     request = AsyncMock(side_effect=asyncio.CancelledError())
     monkeypatch.setattr("resources_servers.audiomc_sim.speech.http_request", request)
     with pytest.raises(asyncio.CancelledError):
+        await synthesize_bytes(**options())
+    assert request.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_after_and_jitter_release_response_before_waiting(monkeypatch):
+    from nemo_gym.retry import RetryBackoff
+
+    failed = Mock()
+    success = Mock(read=AsyncMock(return_value=b"audio"))
+    error = ClientResponseError(None, (), status=429, headers={"Retry-After": "3"})
+    request = AsyncMock(side_effect=[failed, success])
+    monkeypatch.setattr("resources_servers.audiomc_sim.speech.http_request", request)
+    monkeypatch.setattr("resources_servers.audiomc_sim.speech.raise_for_status", AsyncMock(side_effect=[error, None]))
+    monkeypatch.setattr("nemo_gym.retry.random.uniform", lambda low, high: high / 2)
+    waits = []
+
+    async def sleep(seconds):
+        failed.release.assert_called_once()
+        waits.append(seconds)
+
+    monkeypatch.setattr("resources_servers.audiomc_sim.speech.asyncio.sleep", sleep)
+    assert await synthesize_bytes(**options(), retry_backoff=RetryBackoff()) == b"audio"
+    assert waits == [3.25]
+    success.release.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_spent_quota_is_not_retried(monkeypatch):
+    error = ClientResponseError(None, (), status=429)
+    error.response_content = b'{"error":{"code":"insufficient_quota"}}'
+    request = AsyncMock(side_effect=error)
+    monkeypatch.setattr("resources_servers.audiomc_sim.speech.http_request", request)
+    with pytest.raises(ClientResponseError):
         await synthesize_bytes(**options())
     assert request.await_count == 1
