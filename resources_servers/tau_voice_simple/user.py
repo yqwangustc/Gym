@@ -10,6 +10,7 @@ instead of being written next to the trajectory.
 
 import logging
 import re
+import time
 
 from tau2.data_model.audio import AudioEncoding, AudioFormat, audio_bytes_to_string
 from tau2.user.user_simulator import UserSimulator, get_global_user_sim_guidelines_voice
@@ -64,6 +65,7 @@ class VoiceUserSimulator(UserSimulator):
         self.required_agent_write_names = tuple(sorted(set(required_agent_write_names)))
         # (turn index, WAV bytes) for every synthesized turn, in order.
         self.audio_turns: list[tuple[int, bytes]] = []
+        self.tts_wait_seconds = 0.0
 
     @property
     def global_simulation_guidelines(self) -> str:
@@ -112,7 +114,11 @@ class VoiceUserSimulator(UserSimulator):
             LOG.warning("Tau-Voice Simple: empty user turn, TTS skipped (text turn)")
             return user_message
 
-        synthesis = self.tts_client.synthesize(user_message.content or "")
+        started = time.perf_counter()
+        try:
+            synthesis = self.tts_client.synthesize(user_message.content or "")
+        finally:
+            self.tts_wait_seconds += time.perf_counter() - started
         self.audio_turns.append((len(self.audio_turns), synthesis.wav_bytes()))
         user_message.audio_content = audio_bytes_to_string(synthesis.pcm_s16le)
         user_message.audio_format = AudioFormat(

@@ -16,20 +16,27 @@ import base64
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from tau2.agent.base_agent import HalfDuplexAgent
-from tau2.data_model.message import AssistantMessage, MultiToolMessage, ToolCall, ToolMessage, UserMessage
+from tau2.data_model.message import (
+    AssistantMessage,
+    MultiToolMessage,
+    ToolCall,
+    ToolMessage,
+    UserMessage,
+)
 from tau2.data_model.simulation import SimulationRun
 from tau2.data_model.tasks import RewardType, Task
 from tau2.evaluator.evaluator import EvaluationType, evaluate_simulation
 from tau2.orchestrator.modes import CommunicationMode
-from tau2.orchestrator.orchestrator import Orchestrator, Role
+from tau2.orchestrator.orchestrator import Role
 from tau2.registry import registry
 from tau2.runner.build import build_environment
 from tau2.utils.utils import get_now
 
 from resources_servers.tau_voice_simple.airline_assertions import assertions_for_task
+from resources_servers.tau_voice_simple.orchestrator import CALLER_PROTOCOL, VoiceOrchestrator
 from resources_servers.tau_voice_simple.tts import TTSClient
 from resources_servers.tau_voice_simple.user import VoiceUserSimulator
 
@@ -77,7 +84,7 @@ class RelayAgent(HalfDuplexAgent):
 
     def __init__(self, tools, domain_policy: str):
         super().__init__(tools=tools, domain_policy=domain_policy)
-        self.pending: Optional[AssistantMessage] = None
+        self.pending: AssistantMessage | None = None
 
     def get_init_state(self, message_history=None) -> _RelayState:
         return _RelayState()
@@ -141,12 +148,15 @@ class Episode:
         seed: int,
         simulation_id: str,
         settings: EpisodeSettings,
-        tts_client: Optional[TTSClient],
+        tts_client: TTSClient | None,
+        artifact_dir=None,
     ):
         self.domain = domain
         self.task = task
         self.settings = settings
         environment = build_environment(domain, solo_mode=False)
+        self.environment = environment
+        self.artifact_dir = artifact_dir
         self.tools = environment.get_tools()
         self.policy = environment.get_policy()
         self.agent = RelayAgent(tools=self.tools, domain_policy=self.policy)
@@ -158,7 +168,7 @@ class Episode:
             tts_client=tts_client if settings.interaction_mode == "s2t" else None,
             required_agent_write_names=reference_agent_write_names(task, environment),
         )
-        self.orchestrator = Orchestrator(
+        self.orchestrator = VoiceOrchestrator(
             domain=domain,
             agent=self.agent,
             user=self.user,
@@ -172,7 +182,7 @@ class Episode:
             validate_communication=True,
             timeout=settings.timeout_seconds,
         )
-        self.simulation: Optional[SimulationRun] = None
+        self.simulation: SimulationRun | None = None
 
     @property
     def done(self) -> bool:
@@ -206,7 +216,14 @@ class Episode:
             self._step()
         if orchestrator.done:
             return {"done": True, "termination_reason": orchestrator.termination_reason.value}
-        return {"done": False, "observation": self._observation(orchestrator.message)}
+        self.tools = self.environment.get_tools()
+        self.policy = self.environment.get_policy()
+        return {
+            "done": False,
+            "observation": self._observation(orchestrator.message),
+            "domain_policy": self.policy,
+            "tools": [t.openai_schema for t in self.tools],
+        }
 
     def _observation(self, message) -> dict[str, Any]:
         """What the candidate receives: user speech (or text in t2t) or tool results."""
@@ -214,6 +231,8 @@ class Episode:
             if self.settings.interaction_mode == "t2t":
                 return {"type": "user_text", "text": message.content}
             if not message.is_audio or not self.user.audio_turns:
+                if (message.raw_data or {}).get("tau_voice_simple_empty_user_turn"):
+                    return {"type": "user_text", "text": message.content or ""}
                 raise RuntimeError("Tau-Voice Simple s2t candidate input must be audio")
             turn_index, wav = self.user.audio_turns[-1]
             return {
@@ -235,6 +254,11 @@ class Episode:
             if not self.done:
                 raise RuntimeError("the episode has not ended")
             simulation = self.orchestrator._finalize()
+            info.update(
+                caller_protocol=CALLER_PROTOCOL,
+                user_tts_wait_seconds=self.user.tts_wait_seconds,
+                episode_timeout_excludes_user_tts=True,
+            )
             simulation.info = dict(simulation.info or {}) | {"tau_voice_simple": info}
             self.simulation = simulation
         return self.simulation
@@ -251,7 +275,7 @@ class Episode:
         return reward_info.model_dump(mode="json")
 
 
-def assistant_message(content: Optional[str], tool_call: Optional[dict[str, Any]], raw_data: Optional[dict]):
+def assistant_message(content: str | None, tool_call: dict[str, Any] | None, raw_data: dict | None):
     """Tau message for one candidate turn: spoken text or exactly one tool call."""
     if tool_call is not None:
         arguments = tool_call["arguments"]

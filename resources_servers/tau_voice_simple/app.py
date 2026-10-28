@@ -12,12 +12,16 @@ audio and trajectory to the run's tar archive.
 """
 
 import asyncio
+import hashlib
+import json
 import os
 import sys
+import tempfile
 import uuid
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, ClassVar, Literal, Optional
+from pathlib import Path
+from typing import Any, ClassVar, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from loguru import logger
@@ -35,8 +39,8 @@ from nemo_gym.config_types import AggregateMetrics, AggregateMetricsRequest
 from nemo_gym.reward_profile import compute_aggregate_metrics
 from nemo_gym.server_utils import SESSION_ID_KEY
 from resources_servers.tau_voice_simple.audio_archive import AudioArchive
-from resources_servers.tau_voice_simple.source import ensure_tau2_data_dir
-from resources_servers.tau_voice_simple.task_data import DOMAINS, TauVoiceSimpleMetadata
+from resources_servers.tau_voice_simple.source import data_identity, ensure_tau2_data_dir
+from resources_servers.tau_voice_simple.task_data import TauVoiceSimpleMetadata
 from resources_servers.tau_voice_simple.tts import (
     DEFAULT_TTS_INSTRUCTIONS,
     GPT4O_MINI_TTS_VOICES,
@@ -54,6 +58,7 @@ class TauVoiceSimpleConfig(BaseResourcesServerConfig):
     REVERIFY_MODE: ClassVar[ReverifyMode] = ReverifyMode.UNSUPPORTED
 
     interaction_mode: Literal["s2t", "t2t"] = "s2t"
+    artifact_root: str | None = None
     # Tau episode limits, as in the reference run.
     max_steps: int = Field(default=100, gt=0)
     max_errors: int = Field(default=10, gt=0)
@@ -61,7 +66,7 @@ class TauVoiceSimpleConfig(BaseResourcesServerConfig):
 
     # One OpenAI-compatible endpoint serves the user simulator, the NL-assertion judge, and TTS.
     llm_api_base: str
-    llm_api_key: str
+    llm_api_key: str = Field(repr=False)
     # LiteLLM model names (Tau calls LiteLLM); the leading "openai/" selects the provider.
     user_llm: str = "openai/openai/openai/gpt-5.6-luna"
     user_llm_args: dict[str, Any] = Field(default_factory=lambda: {"temperature": 1})
@@ -69,16 +74,16 @@ class TauVoiceSimpleConfig(BaseResourcesServerConfig):
     nl_assertions_llm_args: dict[str, Any] = Field(default_factory=lambda: {"temperature": 0.0})
     tts_model: str = "openai/openai/gpt-4o-mini-tts"
     # Defaults to ``{llm_api_base}/audio/speech``.
-    tts_endpoint: Optional[str] = None
+    tts_endpoint: str | None = None
     tts_instructions: str = DEFAULT_TTS_INSTRUCTIONS
-    tts_timeout_seconds: float = Field(default=120.0, gt=0)
-    tts_max_retries: int = Field(default=3, ge=0)
+    tts_timeout_seconds: float = Field(default=120.0, ge=0)
+    tts_max_retries: int = Field(default=-1, ge=-1)
 
     # Prepared Tau ``data`` directory; fetched from the pinned revision when absent.
     tau2_data_dir: str
     # One tar per run with every episode's user audio and trajectory; None disables it.
-    audio_archive_path: Optional[str] = None
-    expected_num_rows: Optional[int] = Field(default=None, gt=0)
+    audio_archive_path: str | None = None
+    expected_num_rows: int | None = Field(default=None, gt=0)
     # Blocking Tau work (user LLM, TTS, tools, scoring) runs on this many threads.
     worker_threads: int = Field(default=64, gt=0)
     # Tau logs every step at DEBUG through loguru; this is the level kept.
@@ -94,8 +99,8 @@ class TauVoiceSimpleSeedSessionResponse(BaseSeedSessionResponse):
     domain_policy: str
     tools: list[dict[str, Any]]
     done: bool
-    observation: Optional[dict[str, Any]] = None
-    termination_reason: Optional[str] = None
+    observation: dict[str, Any] | None = None
+    termination_reason: str | None = None
 
 
 class ToolCallPayload(BaseModel):
@@ -109,15 +114,17 @@ class AgentTurnRequest(BaseModel):
     """The candidate's turn: spoken text or exactly one tool call, never both."""
 
     model_config = ConfigDict(extra="forbid")
-    content: Optional[str] = None
-    tool_call: Optional[ToolCallPayload] = None
-    raw_data: Optional[dict[str, Any]] = None
+    content: str | None = None
+    tool_call: ToolCallPayload | None = None
+    raw_data: dict[str, Any] | None = None
 
 
 class AgentTurnResponse(BaseModel):
     done: bool
-    observation: Optional[dict[str, Any]] = None
-    termination_reason: Optional[str] = None
+    observation: dict[str, Any] | None = None
+    termination_reason: str | None = None
+    domain_policy: str | None = None
+    tools: list[dict[str, Any]] | None = None
 
 
 class TauVoiceSimpleVerifyRequest(BaseVerifyRequest):
@@ -130,13 +137,14 @@ class TauVoiceSimpleVerifyResponse(TauVoiceSimpleVerifyRequest, BaseVerifyRespon
     domain: str
     task_id: str
     interaction_mode: str
-    tts_voice: Optional[str]
-    termination_reason: Optional[str]
+    tts_voice: str | None
+    termination_reason: str | None
     premature: bool
-    duration_seconds: Optional[float]
-    reward_info: Optional[dict[str, Any]]
+    duration_seconds: float | None
+    reward_info: dict[str, Any] | None
     trajectory: dict[str, Any]
     audio_archive_members: list[str]
+    simulation_path: str | None = None
 
 
 class _Session:
@@ -152,12 +160,14 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
     _sessions: dict[str, _Session] = PrivateAttr(default_factory=dict)
     _tasks: dict[str, dict] = PrivateAttr(default_factory=dict)
     _executor: ThreadPoolExecutor = PrivateAttr()
-    _archive: Optional[AudioArchive] = PrivateAttr(default=None)
+    _archive: AudioArchive | None = PrivateAttr(default=None)
     _episode_module: Any = PrivateAttr(default=None)
+    _tau_data_identity: dict[str, str] = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, context: object) -> None:
         # tau2 reads TAU2_DATA_DIR when first imported, so it is imported only after this.
         data_dir = ensure_tau2_data_dir(self.config.tau2_data_dir)
+        self._tau_data_identity = data_identity(data_dir)
         os.environ["TAU2_DATA_DIR"] = str(data_dir.resolve())
         from resources_servers.tau_voice_simple import episode as episode_module
 
@@ -179,7 +189,10 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
         return app
 
     def _llm_args(self, args: Mapping[str, Any]) -> dict[str, Any]:
-        return dict(args) | {"api_base": self.config.llm_api_base, "api_key": self.config.llm_api_key}
+        return dict(args) | {
+            "api_base": self.config.llm_api_base,
+            "api_key": self.config.llm_api_key,
+        }
 
     def _task(self, metadata: TauVoiceSimpleMetadata):
         key = f"{metadata.domain}/{metadata.task_split}"
@@ -190,7 +203,7 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
         except KeyError:
             raise HTTPException(status_code=422, detail=f"unknown Tau task {key}/{metadata.task_id}") from None
 
-    def _tts_client(self, voice: Optional[str]) -> Optional[TTSClient]:
+    def _tts_client(self, voice: str | None) -> TTSClient | None:
         if self.config.interaction_mode != "s2t":
             return None
         if voice is None:
@@ -222,6 +235,13 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
         self, request: Request, body: TauVoiceSimpleSeedSessionRequest
     ) -> TauVoiceSimpleSeedSessionResponse:
         metadata = body.verifier_metadata
+        task = self._task(metadata)
+        artifact_base = self.config.artifact_root or (
+            str(Path(self.config.audio_archive_path).parent / "episodes") if self.config.audio_archive_path else None
+        )
+        if not artifact_base:
+            raise ValueError("Set artifact_root or audio_archive_path to preserve trajectories")
+        artifact_dir = Path(tempfile.mkdtemp(prefix="episode-", dir=_mkdir(artifact_base)))
         settings = self._episode_module.EpisodeSettings(
             interaction_mode=self.config.interaction_mode,
             max_steps=self.config.max_steps,
@@ -232,19 +252,28 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
         )
         episode = self._episode_module.Episode(
             domain=metadata.domain,
-            task=self._task(metadata),
+            task=task,
             seed=metadata.seed,
             simulation_id=f"{metadata.id}__{uuid.uuid4().hex[:8]}",
             settings=settings,
             tts_client=self._tts_client(metadata.tts_voice),
+            artifact_dir=artifact_dir,
         )
         session_id = request.session[SESSION_ID_KEY]
         self._sessions[session_id] = _Session(episode, metadata)
-        result = await self._run(episode.start)
+        try:
+            result = await self._run(episode.start)
+        except BaseException:
+            self._sessions.pop(session_id, None)
+            raise
         return TauVoiceSimpleSeedSessionResponse(
-            domain_policy=episode.policy,
-            tools=[tool.openai_schema for tool in episode.tools],
-            **result,
+            **(
+                {
+                    "domain_policy": episode.policy,
+                    "tools": [tool.openai_schema for tool in episode.tools],
+                }
+                | result
+            )
         )
 
     async def agent_turn(self, request: Request, body: AgentTurnRequest) -> AgentTurnResponse:
@@ -269,17 +298,39 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
                     if self.config.interaction_mode == "s2t"
                     else "text_in_text_out_half_duplex"
                 ),
-                "user_tts": self.config.tts_model if self.config.interaction_mode == "s2t" else None,
+                "user_tts": (
+                    session.episode.user.tts_client.config.model if self.config.interaction_mode == "s2t" else None
+                ),
                 "tts_voice": metadata.tts_voice,
+                "evaluation_phase": getattr(metadata, "evaluation_phase", "scored"),
                 "clean_audio": True if self.config.interaction_mode == "s2t" else None,
             }
         )
-        reward_info = episode.evaluate()
+        # Persist inference before any LLM-backed judge call. A scorer outage
+        # must not require a second conversation or synthesis.
+        path = episode.artifact_dir / "simulation.json"
+        path.write_bytes(self._episode_module.simulation_json(simulation))
+        (episode.artifact_dir / "episode.json").write_text(
+            json.dumps(
+                {
+                    "metadata": metadata.model_dump(),
+                    "caller_protocol": "caller-tool-priority-v1",
+                    "task_pack": "tau",
+                    "tau_data_identity": self._tau_data_identity,
+                    "task_sha256": hashlib.sha256(episode.task.model_dump_json().encode()).hexdigest(),
+                },
+                indent=2,
+            )
+        )
         members = []
+        for index, wav in episode.user.audio_turns:
+            (episode.artifact_dir / f"user_turn_{index:04d}.wav").write_bytes(wav)
         if self._archive is not None:
             audio = [(f"user_turn_{index:04d}.wav", wav) for index, wav in episode.user.audio_turns]
             audio.append(("simulation.json", self._episode_module.simulation_json(simulation)))
             members = self._archive.append(simulation.id, audio)
+        reward_info = episode.evaluate()
+        (episode.artifact_dir / "reward_info.json").write_text(json.dumps(reward_info, indent=2))
         return simulation, reward_info, members
 
     async def verify(self, request: Request, body: TauVoiceSimpleVerifyRequest) -> TauVoiceSimpleVerifyResponse:
@@ -291,7 +342,11 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
             "domain": metadata.domain,
             "task_id": metadata.task_id,
             "interaction_mode": self.config.interaction_mode,
-            "tts_voice": metadata.tts_voice,
+            "tts_voice": (
+                (session.metadata.tts_voice if session else metadata.tts_voice)
+                if self.config.interaction_mode == "s2t"
+                else None
+            ),
         }
         if session is None or not session.episode.done:
             # The agent stopped before Tau ended the episode; that is not a valid measurement.
@@ -308,9 +363,11 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
                 trajectory={},
                 audio_archive_members=[],
             )
-        async with session.lock:
-            simulation, reward_info, members = await self._run(self._finish, session)
-        self._sessions.pop(session_id, None)
+        try:
+            async with session.lock:
+                simulation, reward_info, members = await self._run(self._finish, session)
+        finally:
+            self._sessions.pop(session_id, None)
         return TauVoiceSimpleVerifyResponse(
             **base,
             reward=float(reward_info["reward"]),
@@ -320,6 +377,7 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
             reward_info=reward_info,
             trajectory=self._episode_module.trajectory_summary(simulation),
             audio_archive_members=members,
+            simulation_path=str(session.episode.artifact_dir / "simulation.json"),
         )
 
     async def close_resources_session(self, request: Request, body: Any = None) -> dict[str, Any]:
@@ -329,10 +387,10 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
     def compute_metrics(self, tasks: Sequence[Sequence[Mapping[str, object]]]) -> dict[str, MetricValue]:
         """Per-domain Tau-Voice Simple success (%, mean reward x 100) and episode diagnostics."""
         rows = [row for task in tasks for row in task]
-        scored = [row for row in rows if not row.get("mask_sample")]
+        scored = rows  # Never drop infrastructure or model failures from denominators.
 
         def summarize(selected: list[Mapping[str, object]], prefix: str) -> dict[str, MetricValue]:
-            rewards = [float(row.get("reward") or 0.0) for row in selected]
+            rewards = [0.0 if row.get("mask_sample") else float(row.get("reward") or 0.0) for row in selected]
             fallbacks = sum(int((row.get("trajectory") or {}).get("protocol_fallbacks") or 0) for row in selected)
             return {
                 f"{prefix}/success": 100.0 * sum(rewards) / len(rewards) if rewards else 0.0,
@@ -344,7 +402,7 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
 
         metrics = summarize(scored, "tau_voice_simple")
         domain_success = []
-        for domain in DOMAINS:
+        for domain in sorted({row.get("domain") for row in rows if row.get("domain")}):
             selected = [row for row in scored if row.get("domain") == domain]
             if selected:
                 metrics.update(summarize(selected, f"tau_voice_simple/{domain}"))
@@ -358,10 +416,12 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
         metrics["tau_voice_simple/macro_success"] = (
             sum(domain_success) / len(domain_success) if domain_success else 0.0
         )
-        metrics["tau_voice_simple/masked_rows"] = len(rows) - len(scored)
+        metrics["tau_voice_simple/masked_rows"] = sum(bool(row.get("mask_sample")) for row in rows)
         if self.config.expected_num_rows is not None:
             metrics["tau_voice_simple/expected_rows"] = self.config.expected_num_rows
-            metrics["tau_voice_simple/complete"] = len(scored) == len(rows) == self.config.expected_num_rows
+            metrics["tau_voice_simple/complete"] = (
+                len(rows) == self.config.expected_num_rows and not metrics["tau_voice_simple/masked_rows"]
+            )
         return metrics
 
     def get_key_metrics(self, agent_metrics: Mapping[str, object]) -> dict[str, object]:
@@ -373,6 +433,11 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
         aggregate.agent_metrics.update(metrics)
         aggregate.key_metrics.update(metrics)
         return aggregate
+
+
+def _mkdir(path: str | Path) -> str | Path:
+    Path(path).mkdir(parents=True, exist_ok=True)
+    return path
 
 
 if __name__ == "__main__":

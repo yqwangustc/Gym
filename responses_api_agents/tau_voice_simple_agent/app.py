@@ -14,16 +14,26 @@ until Tau ends the episode. It then calls ``/verify``.
 import copy
 import json
 import logging
+import re
 import uuid
 from time import time
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import Request
 from pydantic import ConfigDict, Field
 
 from nemo_gym.base_resources_server import BaseRunRequest, BaseVerifyResponse
-from nemo_gym.base_responses_api_agent import BaseResponsesAPIAgentConfig, Body, SimpleResponsesAPIAgent
-from nemo_gym.config_types import AggregateMetrics, AggregateMetricsRequest, ModelServerRef, ResourcesServerRef
+from nemo_gym.base_responses_api_agent import (
+    BaseResponsesAPIAgentConfig,
+    Body,
+    SimpleResponsesAPIAgent,
+)
+from nemo_gym.config_types import (
+    AggregateMetrics,
+    AggregateMetricsRequest,
+    ModelServerRef,
+    ResourcesServerRef,
+)
 from nemo_gym.openai_utils import NeMoGymResponse, NeMoGymResponseCreateParamsNonStreaming
 from nemo_gym.server_utils import get_response_json, raise_for_status
 from responses_api_agents.tau_voice_simple_agent.protocol import (
@@ -73,10 +83,13 @@ class TauVoiceSimpleAgent(SimpleResponsesAPIAgent):
     ray_enabled = False
     config: TauVoiceSimpleAgentConfig
 
-    async def responses(self, body: NeMoGymResponseCreateParamsNonStreaming = Body()) -> NeMoGymResponse:
+    async def responses(
+        self,
+        body: NeMoGymResponseCreateParamsNonStreaming = Body(),  # noqa: B008
+    ) -> NeMoGymResponse:
         raise NotImplementedError("Tau-Voice Simple episodes run through /run")
 
-    async def aggregate_metrics(self, body: AggregateMetricsRequest = Body()) -> AggregateMetrics:
+    async def aggregate_metrics(self, body: AggregateMetricsRequest = Body()) -> AggregateMetrics:  # noqa: B008
         response = await self.server_client.post(
             server_name=self.config.resources_server.name, url_path="/aggregate_metrics", json=body
         )
@@ -85,20 +98,26 @@ class TauVoiceSimpleAgent(SimpleResponsesAPIAgent):
 
     async def _post_resource(self, path: str, payload: dict[str, Any], cookies) -> tuple[dict[str, Any], Any]:
         response = await self.server_client.post(
-            server_name=self.config.resources_server.name, url_path=path, json=payload, cookies=cookies
+            server_name=self.config.resources_server.name,
+            url_path=path,
+            json=payload,
+            cookies=cookies,
         )
         await raise_for_status(response)
         return await get_response_json(response), response.cookies
 
     async def _chat(self, payload: dict[str, Any], cookies) -> tuple[dict[str, Any], Any]:
         response = await self.server_client.post(
-            server_name=self.config.model_server.name, url_path="/v1/chat/completions", json=payload, cookies=cookies
+            server_name=self.config.model_server.name,
+            url_path="/v1/chat/completions",
+            json=payload,
+            cookies=cookies,
         )
         if response.status >= 400:
             raise _ModelCallError(response.status, (await response.read()).decode(errors="replace"))
         return await get_response_json(response), response.cookies
 
-    async def _complete(self, request: dict[str, Any], cookies) -> tuple[dict[str, Any], Optional[dict], Any]:
+    async def _complete(self, request: dict[str, Any], cookies) -> tuple[dict[str, Any], dict | None, Any]:
         """One completion with the reference's single context-budget retry."""
         try:
             completion, cookies = await self._chat(request, cookies)
@@ -115,7 +134,18 @@ class TauVoiceSimpleAgent(SimpleResponsesAPIAgent):
                 retry_request.pop("max_tokens", None)
             else:
                 retry_request["max_tokens"] = max_tokens
-            completion, cookies = await self._chat(retry_request, cookies)
+            try:
+                completion, cookies = await self._chat(retry_request, cookies)
+            except _ModelCallError as retry_error:
+                if (
+                    max_tokens is None
+                    and retry_error.status == 400
+                    and re.search(r"max_tokens must be at least 1, got 0\b", retry_error.detail)
+                ):
+                    raise _ContextExhausted(
+                        {**adjustment, "remaining_output_tokens": 0, "detail": retry_error.detail}
+                    ) from retry_error
+                raise
             return completion, adjustment, cookies
 
     async def _next_turn(self, messages, tools, tool_names, sampling, seed, cookies) -> tuple[dict[str, Any], Any]:
@@ -133,6 +163,12 @@ class TauVoiceSimpleAgent(SimpleResponsesAPIAgent):
                 failures.append(error.as_record(attempt))
                 LOG.warning("Tau-Voice Simple protocol_failure %s %s", error.category, error.detail)
                 continue
+            except _ContextExhausted as error:
+                return {
+                    "content": CONTEXT_EXHAUSTED_FALLBACK,
+                    "raw_data": _raw_data(None, failures + [error.failure])
+                    | {"tau_voice_simple_context_exhausted": error.failure},
+                }, cookies
             except _ModelCallError as error:
                 failure = context_length_failure(error.status, error.detail)
                 if failure is None:
@@ -166,11 +202,13 @@ class TauVoiceSimpleAgent(SimpleResponsesAPIAgent):
         sampling = _sampling(body.responses_create_params)
         seed_value = int(body.verifier_metadata.get("seed", self.config.default_seed))
 
-        system_prompt = build_system_prompt(seeded["domain_policy"])
+        instructions = body.responses_create_params.instructions
+        system_prompt = _system_prompt(seeded["domain_policy"], instructions)
         messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         transcript: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         result = seeded
         turns = 0
+        last_context = None
         while not result["done"]:
             if turns >= self.config.max_agent_turns:
                 break
@@ -178,6 +216,10 @@ class TauVoiceSimpleAgent(SimpleResponsesAPIAgent):
             reply, model_cookies = await self._next_turn(
                 messages, tools, tool_names, sampling, seed_value, model_cookies
             )
+            context = {"system_prompt": messages[0]["content"], "tools": tools}
+            if context != last_context:
+                reply.setdefault("raw_data", {})["candidate_context"] = copy.deepcopy(context)
+                last_context = copy.deepcopy(context)
             _record_reply(reply, messages, transcript)
             result, resource_cookies = await self._post_resource("/agent_turn", reply, resource_cookies)
             turns += 1
@@ -216,7 +258,19 @@ def _sampling(params: NeMoGymResponseCreateParamsNonStreaming) -> dict[str, Any]
     return sampling
 
 
-def _raw_data(reasoning: Optional[str], failures: list[dict[str, Any]]) -> dict[str, Any]:
+class _ContextExhausted(Exception):
+    def __init__(self, failure):
+        self.failure = failure
+
+
+def _system_prompt(policy, instructions=None):
+    """Override the voice wrapper, never discard the task's mandatory policy."""
+    if instructions is not None:
+        return instructions + f"\n\n<domain_policy>\n{policy}\n</domain_policy>"
+    return build_system_prompt(policy)
+
+
+def _raw_data(reasoning: str | None, failures: list[dict[str, Any]]) -> dict[str, Any]:
     raw_data: dict[str, Any] = {}
     if reasoning is not None:
         raw_data["reasoning_content"] = reasoning
@@ -233,7 +287,10 @@ def _deliver(observation: dict[str, Any], messages: list, transcript: list) -> N
             {
                 "role": "user",
                 "content": [
-                    {"type": "input_audio", "input_audio": {"data": observation["audio_wav_base64"], "format": "wav"}},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": observation["audio_wav_base64"], "format": "wav"},
+                    },
                     {"type": "text", "text": USER_TURN_INSTRUCTION},
                 ],
             }
@@ -244,7 +301,11 @@ def _deliver(observation: dict[str, Any], messages: list, transcript: list) -> N
         transcript.append({"role": "user", "content": observation["text"]})
     elif kind == "tool_results":
         for result in observation["results"]:
-            message = {"role": "tool", "tool_call_id": result["tool_call_id"], "content": result["content"]}
+            message = {
+                "role": "tool",
+                "tool_call_id": result["tool_call_id"],
+                "content": result["content"],
+            }
             messages.append(message)
             transcript.append(message)
     else:
@@ -262,7 +323,10 @@ def _record_reply(reply: dict[str, Any], messages: list, transcript: list) -> No
                 {
                     "id": call["id"],
                     "type": "function",
-                    "function": {"name": call["name"], "arguments": json.dumps(call["arguments"], ensure_ascii=False)},
+                    "function": {
+                        "name": call["name"],
+                        "arguments": json.dumps(call["arguments"], ensure_ascii=False),
+                    },
                 }
             ],
         }
@@ -281,7 +345,11 @@ def _split_transcript(transcript: list[dict[str, Any]]) -> tuple[list[dict], lis
             items.append({"type": "message", "role": role, "content": message["content"]})
         elif role == "tool":
             items.append(
-                {"type": "function_call_output", "call_id": message["tool_call_id"], "output": message["content"]}
+                {
+                    "type": "function_call_output",
+                    "call_id": message["tool_call_id"],
+                    "output": message["content"],
+                }
             )
         elif message.get("tool_calls"):
             call = message["tool_calls"][0]

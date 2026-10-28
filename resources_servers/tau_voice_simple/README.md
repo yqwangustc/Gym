@@ -36,7 +36,10 @@ The work is split between this resources server and the
 Tau's own `Orchestrator` drives the episode. Its agent is a relay that returns
 the message the Gym agent submitted, so termination (`user_stop`,
 `agent_stop`, `max_steps`, `too_many_errors`, `timeout`) and communication
-checks are Tau's unmodified code.
+checks use Tau's code. A small orchestrator subclass excludes time spent waiting
+for user TTS from the episode timeout. Andrew's user-message normalizer keeps
+user tool calls and records any accompanying dropped text; no second mixed-turn
+communication policy is introduced.
 
 The candidate side follows the reference:
 
@@ -84,6 +87,22 @@ Set `audio_archive_path` to collect every episode's synthesized user turns
 (`<episode>/user_turn_NNNN.wav`, PCM16 mono, as returned by TTS) and its Tau
 trajectory (`<episode>/simulation.json`, with inline audio removed) into one
 uncompressed tar per run.
+
+`artifact_root` (or `episodes/` beside the audio archive) also preserves each
+simulation, episode identity and individual WAVs before judging. A judge outage
+therefore leaves inference evidence available for CPU rescoring. Saved rollouts
+include `simulation_path`; masked failures remain zero in metric denominators.
+
+Transient TTS transport errors, empty responses,429/5xx and the gateway's known
+database-overload401 retry the identical request. `tts_max_retries: -1` means
+unlimited retries; ordinary authentication/budget failures still surface.
+`tts_timeout_seconds: 0` disables the per-request timeout. TTS wait time does
+not consume the episode timeout. Audio remains unaugmented.
+
+Candidate `instructions` may replace the voice wrapper while preserving the
+mandatory domain policy. Context recovery distinguishes exact token counts from
+lower bounds; the latter defer output allowance to vLLM. A zero remaining output
+allowance ends only that episode, with a recorded context failure.
 
 ## Metrics
 

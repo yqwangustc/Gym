@@ -94,10 +94,13 @@ class TestContextHandling:
         failure = context_length_failure(400, self.CHARACTERS)
         assert adjusted_output_limit(failure, 4096)[0] is False
 
-    def test_token_bound_retries_with_remaining_budget(self) -> None:
+    def test_token_lower_bound_delegates_remaining_budget_to_server(self) -> None:
         failure = context_length_failure(400, self.TOKENS)
-        retry, max_tokens, _ = adjusted_output_limit(failure, 4000)
-        assert retry and max_tokens == 16384 - 15000 - 128
+        retry, max_tokens, adjustment = adjusted_output_limit(failure, 4000)
+        assert retry and max_tokens is None
+        assert adjustment["output_limit_source"] == "server_remaining_context"
+        exact = {"input_tokens": 15000, "max_context_tokens": 16384}
+        assert adjusted_output_limit(exact, 4000)[1] == 16384 - 15000 - 128
 
     def test_other_errors_are_not_context_failures(self) -> None:
         assert context_length_failure(500, self.TOKENS) is None

@@ -7,14 +7,24 @@ Ported from VLMEvalKitMcore's ``tau_voice_simple/openai_tts.py``: the same
 Endpoint and key come from the server config instead of environment lookups.
 """
 
+import http.client
 import io
 import json
+import logging
+import math
 import urllib.error
 import urllib.request
 import wave
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import sleep
 from typing import Callable
+
+
+LOG = logging.getLogger(__name__)
+
+
+class _EmptyTTSResponseError(RuntimeError):
+    """Transient empty audio response."""
 
 
 # The reference evaluation's fixed voice pool, in round-robin order.
@@ -47,12 +57,12 @@ def voice_for_session(session_ordinal: int, voices: tuple[str, ...] = GPT4O_MINI
 @dataclass(frozen=True)
 class TTSConfig:
     endpoint: str
-    api_key: str
+    api_key: str = field(repr=False)
     model: str
     voice: str
     instructions: str = DEFAULT_TTS_INSTRUCTIONS
     timeout_seconds: float = 120.0
-    max_retries: int = 3
+    max_retries: int = -1
 
 
 @dataclass(frozen=True)
@@ -72,10 +82,10 @@ class TTSClient:
     def __init__(self, config: TTSConfig, *, urlopen: Callable | None = None):
         if config.voice not in GPT4O_MINI_TTS_VOICES:
             raise ValueError(f"Unsupported TTS voice {config.voice!r}; choose from {list(GPT4O_MINI_TTS_VOICES)}")
-        if config.timeout_seconds <= 0:
-            raise ValueError("TTS timeout_seconds must be positive")
-        if config.max_retries < 0:
-            raise ValueError("TTS max_retries must be non-negative")
+        if not math.isfinite(config.timeout_seconds) or config.timeout_seconds < 0:
+            raise ValueError("TTS timeout_seconds must be non-negative and finite")
+        if config.max_retries < -1:
+            raise ValueError("TTS max_retries must be -1 or non-negative")
         self.config = config
         self._urlopen = urlopen or urllib.request.urlopen
 
@@ -104,24 +114,66 @@ class TTSClient:
         pcm_s16le, sample_rate = decode_pcm16_wav(self._request_with_retries(request))
         return SynthesisResult(pcm_s16le, sample_rate, self.config.model, self.config.voice)
 
-    def _request_with_retries(self, request: urllib.request.Request) -> bytes:
-        for attempt in range(self.config.max_retries + 1):
+    def _request_with_retries(
+        self,
+        request: urllib.request.Request,
+    ) -> bytes:
+        api_key = self.config.api_key
+        attempt = 0
+        while True:
             try:
-                with self._urlopen(request, timeout=self.config.timeout_seconds) as response:
+                LOG.info("TauVoiceSimple waiting for user TTS (attempt %d)", attempt + 1)
+                with self._urlopen(
+                    request,
+                    timeout=self.config.timeout_seconds or None,
+                ) as response:
                     audio = response.read()
                     if not audio:
-                        raise RuntimeError("TTS endpoint returned an empty response")
+                        raise _EmptyTTSResponseError("TTS endpoint returned an empty response")
+                    if attempt:
+                        LOG.info("TauVoiceSimple user TTS recovered after %d retries", attempt)
                     return audio
             except urllib.error.HTTPError as exc:
-                body = exc.read(1000).decode("utf-8", errors="replace").replace(self.config.api_key, "<redacted>")
-                retryable = exc.code == 429 or 500 <= exc.code < 600
-                if not retryable or attempt >= self.config.max_retries:
+                # This gateway sometimes labels its own DB saturation as 401.
+                # Retry only that known infrastructure error; invalid credentials
+                # and budget failures must still stop immediately.
+                body = ""
+                if exc.code == 401:
+                    try:
+                        body = body or exc.read(1000).decode("utf-8", errors="replace")
+                    except (OSError, http.client.HTTPException):
+                        body = "<error body unavailable>"
+                gateway_overloaded = (
+                    exc.code == 401 and "Error querying the database" in body and "too many clients already" in body
+                )
+                retryable = gateway_overloaded or exc.code == 429 or 500 <= exc.code < 600
+                if not retryable or (self.config.max_retries >= 0 and attempt >= self.config.max_retries):
+                    try:
+                        body = body or exc.read(1000).decode("utf-8", errors="replace")
+                    except (OSError, http.client.HTTPException):
+                        body = "<error body unavailable>"
+                    finally:
+                        exc.close()
+                    body = body.replace(api_key, "<redacted>")
                     raise RuntimeError(f"TTS request failed with HTTP {exc.code}: {body}") from exc
-            except (urllib.error.URLError, TimeoutError) as exc:
-                if attempt >= self.config.max_retries:
-                    raise RuntimeError(f"TTS request failed: {getattr(exc, 'reason', exc)}") from exc
-            sleep(min(8.0, 2.0**attempt))
-        raise AssertionError("unreachable")
+                failure = f"HTTP {exc.code}"
+                exc.close()
+            except (OSError, http.client.HTTPException, _EmptyTTSResponseError) as exc:
+                if self.config.max_retries >= 0 and attempt >= self.config.max_retries:
+                    reason = str(getattr(exc, "reason", exc)).replace(api_key, "<redacted>")
+                    raise RuntimeError(f"TTS request failed: {reason}") from exc
+                failure = type(exc).__name__
+            delay = min(30.0, 2.0 ** min(attempt, 5))
+            # Do not log credentials, request text, URLs, or provider error bodies.
+            LOG.warning(
+                "TauVoiceSimple transient user TTS failure (%s); retrying same turn in %.0fs (retry %d, limit=%s)",
+                failure,
+                delay,
+                attempt + 1,
+                "unlimited" if self.config.max_retries == -1 else self.config.max_retries,
+            )
+            sleep(delay)
+            attempt += 1
 
 
 def decode_pcm16_wav(wav_bytes: bytes) -> tuple[bytes, int]:

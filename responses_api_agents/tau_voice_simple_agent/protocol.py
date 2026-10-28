@@ -10,7 +10,7 @@ messages, and recognition of vLLM's context-length errors.
 
 import json
 import re
-from typing import Any, Optional
+from typing import Any
 
 
 USER_TURN_INSTRUCTION = (
@@ -80,7 +80,7 @@ def strip_reasoning(text: str) -> str:
     return text
 
 
-def extract_reasoning(message: dict[str, Any]) -> Optional[str]:
+def extract_reasoning(message: dict[str, Any]) -> str | None:
     """Parsed reasoning fields first, then ``<think>`` blocks in the content."""
     for key in ("reasoning_content", "reasoning"):
         value = message.get(key)
@@ -97,7 +97,7 @@ def extract_reasoning(message: dict[str, Any]) -> Optional[str]:
 class ProtocolError(ValueError):
     """A retryable candidate output that violates the turn protocol."""
 
-    def __init__(self, category: str, detail: str, rejected_output: Optional[dict[str, Any]] = None):
+    def __init__(self, category: str, detail: str, rejected_output: dict[str, Any] | None = None):
         super().__init__(detail)
         self.category = category
         self.detail = detail
@@ -142,7 +142,9 @@ def parse_turn(completion: dict[str, Any], tool_names: set[str]) -> dict[str, An
     if tool_calls:
         if visible:
             raise ProtocolError(
-                "mixed_text_and_tool_call", "Model returned text and a tool call in one turn", rejected
+                "mixed_text_and_tool_call",
+                "Model returned text and a tool call in one turn",
+                rejected,
             )
         function = tool_calls[0].get("function") or {}
         arguments = function.get("arguments")
@@ -151,7 +153,9 @@ def parse_turn(completion: dict[str, Any], tool_names: set[str]) -> dict[str, An
                 arguments = json.loads(arguments)
             except json.JSONDecodeError as error:
                 raise ProtocolError(
-                    "malformed_tool_arguments", f"Tool arguments are not valid JSON: {error}", rejected
+                    "malformed_tool_arguments",
+                    f"Tool arguments are not valid JSON: {error}",
+                    rejected,
                 ) from error
         if function.get("name") not in tool_names:
             raise ProtocolError("unknown_tool", f"Unknown tool name: {function.get('name')}", rejected)
@@ -169,12 +173,14 @@ def parse_turn(completion: dict[str, Any], tool_names: set[str]) -> dict[str, An
         raise ProtocolError("empty_visible_content", "Model returned empty user-visible content", rejected)
     if "<think>" in visible or "</think>" in visible:
         raise ProtocolError(
-            "incomplete_reasoning_fragment", "Model returned an incomplete reasoning fragment", rejected
+            "incomplete_reasoning_fragment",
+            "Model returned an incomplete reasoning fragment",
+            rejected,
         )
     return {"content": visible, "reasoning_content": reasoning}
 
 
-def context_length_failure(status: int, detail: str) -> Optional[dict[str, Any]]:
+def context_length_failure(status: int, detail: str) -> dict[str, Any] | None:
     """Recognize vLLM's context-limit HTTP 400 without masking other API errors."""
     if status != 400:
         return None
@@ -194,6 +200,7 @@ def context_length_failure(status: int, detail: str) -> Optional[dict[str, Any]]
             "input_tokens": int(match.group("input_tokens")),
             "max_context_tokens": int(match.group("max_tokens")),
             "requested_output_tokens": int(match.group("requested_output_tokens")),
+            "input_tokens_lower_bound": True,
             "requested_total_tokens": int(match.group("total_tokens")),
         }
     match = _CONTEXT_CHARACTER_BUDGET_RE.search(detail)
@@ -208,7 +215,7 @@ def context_length_failure(status: int, detail: str) -> Optional[dict[str, Any]]
     return None
 
 
-def adjusted_output_limit(failure: dict[str, Any], max_tokens: Optional[int]) -> tuple[bool, Optional[int], dict]:
+def adjusted_output_limit(failure: dict[str, Any], max_tokens: int | None) -> tuple[bool, int | None, dict]:
     """The reference's single retry after a context rejection.
 
     Returns (retry, new max_tokens, adjustment record). A character-bound
@@ -220,10 +227,30 @@ def adjusted_output_limit(failure: dict[str, Any], max_tokens: Optional[int]) ->
     if "input_tokens" not in failure:
         if max_tokens is None or max_tokens < max_context:
             return False, None, {}
-        return True, None, {**failure, "adjusted_max_tokens": None, "output_limit_source": "server_remaining_context"}
+        return (
+            True,
+            None,
+            {
+                **failure,
+                "adjusted_max_tokens": None,
+                "output_limit_source": "server_remaining_context",
+            },
+        )
     available = max_context - failure["input_tokens"]
     if max_tokens is None:
         return False, None, {}
+    if failure.get("input_tokens_lower_bound"):
+        if available <= 128 or available >= max_tokens:
+            return False, None, {}
+        return (
+            True,
+            None,
+            {
+                **failure,
+                "adjusted_max_tokens": None,
+                "output_limit_source": "server_remaining_context",
+            },
+        )
     adjusted = min(max_tokens, max(1, available - 128))
     if available <= 128 or adjusted >= max_tokens:
         return False, None, {}

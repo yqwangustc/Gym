@@ -7,6 +7,7 @@ tasks, policies, user-simulator guidelines), so the server either uses a
 prepared copy or clones the pinned revision once into a shared directory.
 """
 
+import hashlib
 import shutil
 import time
 import uuid
@@ -20,6 +21,15 @@ TAU2_BENCH_REPO_URL = "https://github.com/sierra-research/tau2-bench"
 TAU2_BENCH_REF = "8ebb7499622fc2be9b9d510d6f7a7653461f4f29"
 DOMAINS = ("airline", "retail", "telecom")
 _LOCK_STALE_SECONDS = 3600.0
+
+
+def data_identity(data_dir: Path) -> dict[str, str]:
+    """Portable identity for the policies, fixtures and scoring data used by Tau."""
+    return {
+        str(p.relative_to(data_dir)): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(data_dir.rglob("*"))
+        if p.is_file() and p.suffix in {".json", ".jsonl", ".md", ".txt"}
+    }
 
 
 def has_tau2_data(data_dir: Path) -> bool:
@@ -52,7 +62,10 @@ def ensure_tau2_data_dir(data_dir: str | Path, repo_url: str = TAU2_BENCH_REPO_U
         if not has_tau2_data(data_dir):
             with TemporaryDirectory(prefix=f"tau2-{uuid.uuid4().hex[:8]}-", dir=data_dir.parent) as tmp:
                 checkout = Path(tmp) / "tau2-bench"
-                run(["git", "clone", "--quiet", "--filter=blob:none", repo_url, str(checkout)], check=True)
+                run(
+                    ["git", "clone", "--quiet", "--filter=blob:none", repo_url, str(checkout)],
+                    check=True,
+                )
                 run(["git", "-C", str(checkout), "checkout", "--quiet", ref], check=True)
                 if data_dir.exists():
                     shutil.rmtree(data_dir)
