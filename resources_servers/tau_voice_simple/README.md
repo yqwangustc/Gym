@@ -104,6 +104,29 @@ mandatory domain policy. Context recovery distinguishes exact token counts from
 lower bounds; the latter defer output allowance to vLLM. A zero remaining output
 allowance ends only that episode, with a recorded context failure.
 
+## Optional task packs
+
+`task_pack: eva` and `task_pack: mivas` adapt external tasks to this same clean
+half-duplex loop. Set `source_root`, `source_python` and (for separate MIVAS
+tasks) `task_data_root`. The upstream runtime runs only deterministic tools
+and verifiers in a per-episode subprocess; its model and TTS are not started.
+Install each upstream runtime's dependencies in its own environment. The
+normal resource requirements remain unchanged.
+
+EVA has airline/ITSM/medical_hr domains (50/80/83 tasks); MIVAS has healthcare,
+legal and customer-support (72 each). This is adapted task-completion scoring,
+not EVA's composite experience score or native full-duplex/noisy MIVAS results.
+Caller goals and verifier ground truth remain separate from candidate inputs.
+Source content hashes bind prepared metadata to tools, policies and verifiers.
+Specialist handoffs refresh candidate policy/tool schemas without deleting
+history. Native terminal tools end episodes without requiring a spoken reply.
+
+Reference sources: ServiceNow/eva `2a0b0f474fbbac6f67ca4ddcd2b3b278e2140bef`,
+bluejay-ai-dev/mivas-bench `eda5d751bcd9ba474a280119cb724bd6f46b61e6`, and
+bluejay-labs/mivas-bench tasks `2eb37a9084bd65ab9740210fc93b77230c578ac4`.
+These sources and task data stay outside the Gym checkout. Audio-evals supplies
+opt-in metadata preparation and graph configuration. Tau remains the default.
+
 ## Metrics
 
 | Metric | Meaning |

@@ -212,6 +212,13 @@ class TauVoiceSimpleAgent(SimpleResponsesAPIAgent):
         while not result["done"]:
             if turns >= self.config.max_agent_turns:
                 break
+            # External packs may hand off to a different specialist. Retain
+            # all history, but replace the current policy and available tools.
+            if result.get("domain_policy") is not None:
+                messages[0]["content"] = _system_prompt(result["domain_policy"], instructions)
+            if result.get("tools") is not None:
+                tools = result["tools"]
+                tool_names = {t["function"]["name"] for t in tools}
             _deliver(result["observation"], messages, transcript)
             reply, model_cookies = await self._next_turn(
                 messages, tools, tool_names, sampling, seed_value, model_cookies

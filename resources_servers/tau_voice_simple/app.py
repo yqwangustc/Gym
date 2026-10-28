@@ -58,6 +58,10 @@ class TauVoiceSimpleConfig(BaseResourcesServerConfig):
     REVERIFY_MODE: ClassVar[ReverifyMode] = ReverifyMode.UNSUPPORTED
 
     interaction_mode: Literal["s2t", "t2t"] = "s2t"
+    task_pack: Literal["tau", "eva", "mivas"] = "tau"
+    source_root: str | None = None
+    source_python: str | None = None
+    task_data_root: str | None = None
     artifact_root: str | None = None
     # Tau episode limits, as in the reference run.
     max_steps: int = Field(default=100, gt=0)
@@ -175,6 +179,15 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
         logger.add(sys.stderr, level=self.config.tau2_log_level)
 
         self._episode_module = episode_module
+        if self.config.task_pack != "tau":
+            if not self.config.source_root:
+                raise ValueError("External task packs require a pinned source_root")
+            prefix = f"TAU_VOICE_SIMPLE_{self.config.task_pack.upper()}"
+            os.environ[prefix + "_ROOT"] = self.config.source_root
+            if self.config.source_python:
+                os.environ[prefix + "_PYTHON"] = self.config.source_python
+            if self.config.task_data_root:
+                os.environ[prefix + "_DATA_ROOT"] = self.config.task_data_root
         episode_module.configure_nl_assertions_judge(
             self.config.nl_assertions_llm, self._llm_args(self.config.nl_assertions_llm_args)
         )
@@ -195,6 +208,22 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
         }
 
     def _task(self, metadata: TauVoiceSimpleMetadata):
+        if metadata.task_pack != self.config.task_pack:
+            raise HTTPException(status_code=422, detail="Row/resource task-pack mismatch")
+        if self.config.task_pack != "tau":
+            from resources_servers.tau_voice_simple.task_packs import TaskPack
+
+            key = f"{metadata.domain}/{metadata.task_split}"
+            if key not in self._tasks:
+                self._tasks[key] = TaskPack(self.config.task_pack, metadata.domain, metadata.task_split)
+            backend = self._tasks[key]
+            expected = getattr(metadata, "task_contract_sha256", None)
+            if expected and backend.contracts.get(metadata.task_id, {}).get("contract_sha256") != expected:
+                raise HTTPException(status_code=422, detail="Prepared task contract changed")
+            tasks = {str(t.id): t for t in backend.load_tasks()}
+            if metadata.task_id not in tasks:
+                raise HTTPException(status_code=422, detail="Unknown external task")
+            return tasks[metadata.task_id]
         key = f"{metadata.domain}/{metadata.task_split}"
         if key not in self._tasks:
             self._tasks[key] = self._episode_module.load_tasks(metadata.domain, metadata.task_split)
@@ -242,6 +271,8 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
         if not artifact_base:
             raise ValueError("Set artifact_root or audio_archive_path to preserve trajectories")
         artifact_dir = Path(tempfile.mkdtemp(prefix="episode-", dir=_mkdir(artifact_base)))
+        backend = self._tasks[f"{metadata.domain}/{metadata.task_split}"] if self.config.task_pack != "tau" else None
+        environment = backend.build_environment(task, artifact_dir) if backend else None
         settings = self._episode_module.EpisodeSettings(
             interaction_mode=self.config.interaction_mode,
             max_steps=self.config.max_steps,
@@ -257,6 +288,8 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
             simulation_id=f"{metadata.id}__{uuid.uuid4().hex[:8]}",
             settings=settings,
             tts_client=self._tts_client(metadata.tts_voice),
+            environment=environment,
+            pack_backend=backend,
             artifact_dir=artifact_dir,
         )
         session_id = request.session[SESSION_ID_KEY]
@@ -264,6 +297,7 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
         try:
             result = await self._run(episode.start)
         except BaseException:
+            episode.close()
             self._sessions.pop(session_id, None)
             raise
         return TauVoiceSimpleSeedSessionResponse(
@@ -315,7 +349,7 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
                 {
                     "metadata": metadata.model_dump(),
                     "caller_protocol": "caller-tool-priority-v1",
-                    "task_pack": "tau",
+                    "task_pack": self.config.task_pack,
                     "tau_data_identity": self._tau_data_identity,
                     "task_sha256": hashlib.sha256(episode.task.model_dump_json().encode()).hexdigest(),
                 },
@@ -367,6 +401,7 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
             async with session.lock:
                 simulation, reward_info, members = await self._run(self._finish, session)
         finally:
+            session.episode.close()
             self._sessions.pop(session_id, None)
         return TauVoiceSimpleVerifyResponse(
             **base,
@@ -381,7 +416,9 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
         )
 
     async def close_resources_session(self, request: Request, body: Any = None) -> dict[str, Any]:
-        self._sessions.pop(request.session.get(SESSION_ID_KEY), None)
+        session = self._sessions.pop(request.session.get(SESSION_ID_KEY), None)
+        if session:
+            session.episode.close()
         return {}
 
     def compute_metrics(self, tasks: Sequence[Sequence[Mapping[str, object]]]) -> dict[str, MetricValue]:
@@ -422,10 +459,12 @@ class TauVoiceSimpleServer(SimpleResourcesServer):
             metrics["tau_voice_simple/complete"] = (
                 len(rows) == self.config.expected_num_rows and not metrics["tau_voice_simple/masked_rows"]
             )
-        return metrics
+        prefix = self.config.task_pack if self.config.task_pack != "tau" else "tau_voice_simple"
+        return {key.replace("tau_voice_simple", prefix, 1): value for key, value in metrics.items()}
 
     def get_key_metrics(self, agent_metrics: Mapping[str, object]) -> dict[str, object]:
-        return {key: value for key, value in agent_metrics.items() if key.startswith("tau_voice_simple/")}
+        prefix = self.config.task_pack if self.config.task_pack != "tau" else "tau_voice_simple"
+        return {key: value for key, value in agent_metrics.items() if key.startswith(prefix + "/")}
 
     async def aggregate_metrics(self, body: AggregateMetricsRequest) -> AggregateMetrics:
         aggregate = compute_aggregate_metrics(body.verify_responses)

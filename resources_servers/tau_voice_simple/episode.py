@@ -26,7 +26,7 @@ from tau2.data_model.message import (
     ToolMessage,
     UserMessage,
 )
-from tau2.data_model.simulation import SimulationRun
+from tau2.data_model.simulation import SimulationRun, TerminationReason
 from tau2.data_model.tasks import RewardType, Task
 from tau2.evaluator.evaluator import EvaluationType, evaluate_simulation
 from tau2.orchestrator.modes import CommunicationMode
@@ -149,13 +149,16 @@ class Episode:
         simulation_id: str,
         settings: EpisodeSettings,
         tts_client: TTSClient | None,
+        environment=None,
+        pack_backend=None,
         artifact_dir=None,
     ):
         self.domain = domain
         self.task = task
         self.settings = settings
-        environment = build_environment(domain, solo_mode=False)
+        environment = environment or build_environment(domain, solo_mode=False)
         self.environment = environment
+        self.pack_backend = pack_backend
         self.artifact_dir = artifact_dir
         self.tools = environment.get_tools()
         self.policy = environment.get_policy()
@@ -208,6 +211,9 @@ class Episode:
 
     def _step(self) -> None:
         self.orchestrator.step()
+        if self.pack_backend and self.environment.session_ended:
+            self.orchestrator.done = True
+            self.orchestrator.termination_reason = TerminationReason.AGENT_STOP
         self.orchestrator._check_termination()
 
     def _advance(self) -> dict[str, Any]:
@@ -259,11 +265,25 @@ class Episode:
                 user_tts_wait_seconds=self.user.tts_wait_seconds,
                 episode_timeout_excludes_user_tts=True,
             )
+            if self.pack_backend:
+                self.environment.save_evidence()
+                info.update(
+                    task_pack=self.pack_backend.name,
+                    task_contract_sha256=self.pack_backend.contracts[str(self.task.id)]["contract_sha256"],
+                )
             simulation.info = dict(simulation.info or {}) | {"tau_voice_simple": info}
             self.simulation = simulation
         return self.simulation
 
     def evaluate(self) -> dict[str, Any]:
+        if self.pack_backend:
+            verdict = self.pack_backend.score(
+                {
+                    "task_id": str(self.task.id),
+                    "simulation_path": str(self.artifact_dir / "simulation.json"),
+                }
+            )
+            return {"reward": verdict["reward"], "components": verdict["components"]}
         reward_info = evaluate_simulation(
             simulation=self.simulation,
             task=self.task,
@@ -273,6 +293,10 @@ class Episode:
             mode=CommunicationMode.HALF_DUPLEX,
         )
         return reward_info.model_dump(mode="json")
+
+    def close(self):
+        if self.pack_backend:
+            self.environment.close()
 
 
 def assistant_message(content: str | None, tool_call: dict[str, Any] | None, raw_data: dict | None):
