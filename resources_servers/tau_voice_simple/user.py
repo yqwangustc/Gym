@@ -72,8 +72,34 @@ class VoiceUserSimulator(UserSimulator):
             guidelines += STOP_GUARD_GUIDELINE
         return guidelines
 
+    # An empty user reply (no text, no tool call) fails tau2's UserMessage.validate() in the orchestrator and takes
+    # the whole resources server, i.e. every episode of the run, down with it. Sample again a few times first.
+    EMPTY_TURN_RETRIES = 3
+
     def _generate_next_message(self, message, state):
         user_message = super()._generate_next_message(message, state)
+        for attempt in range(self.EMPTY_TURN_RETRIES):
+            if user_message.is_tool_call() or (user_message.content or "").strip():
+                break
+            LOG.warning(
+                "Tau-Voice Simple: empty user reply, sampling again (%d/%d)", attempt + 1, self.EMPTY_TURN_RETRIES
+            )
+            user_message = super()._generate_next_message(message, state)
+            user_message.raw_data = dict(user_message.raw_data or {}) | {
+                "tau_voice_simple_empty_user_turn": {"resampled": attempt + 1}
+            }
+        if user_message.is_tool_call() and (user_message.content or "").strip():
+            # The user LLM (gpt-5.6-luna through the hub, since 2026-10-26) sometimes returns a spoken preamble together
+            # with its phone tool call ("Okay, I'll check that now." + check_network_status()). tau2's orchestrator treats a
+            # user message with both text and tool calls as a communication error and ends the episode as user_error with
+            # reward 0, which killed about half of the telecom episodes (the longer troubleshooting ones). Keep the tool
+            # call as a tool-only turn, drop the text (the user speaks again after the tool result) and record it.
+            dropped = user_message.content
+            user_message.content = None
+            user_message.raw_data = dict(user_message.raw_data or {}) | {
+                "tau_voice_simple_text_with_tool_call": {"dropped_text": dropped}
+            }
+            LOG.warning("Tau-Voice Simple: user turn carried text with a tool call; text dropped, tool call kept")
         original_content = user_message.content
         if not user_message.is_tool_call():
             user_message.content = suppress_stop_after_pending_action(

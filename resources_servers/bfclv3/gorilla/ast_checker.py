@@ -1,3 +1,5 @@
+# Vendored from Gorilla / Berkeley Function Calling Leaderboard (https://github.com/ShishirPatil/gorilla), Apache License 2.0;
+# see VENDORING.md in this directory. Only this two-line attribution header was added; the body is the upstream copy.
 """
 Standalone AST-based function call checker extracted from BFCL v3.
 
